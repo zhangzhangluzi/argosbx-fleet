@@ -70,6 +70,14 @@ rules:
 - DOMAIN-SUFFIX,aistudio.google.com,AI线路
 - DOMAIN-SUFFIX,generativelanguage.googleapis.com,AI线路
 - DOMAIN-SUFFIX,notebooklm.google.com,AI线路
+- DOMAIN-SUFFIX,notebooklm.google,AI线路
+- DOMAIN-SUFFIX,notebook.google,AI线路
+- DOMAIN-SUFFIX,copilot.microsoft.com,AI线路
+- DOMAIN-SUFFIX,copilot.com,AI线路
+- DOMAIN-SUFFIX,copilot.cloud.microsoft,AI线路
+- DOMAIN-SUFFIX,grok.com,AI线路
+- DOMAIN-SUFFIX,grok.x.ai,AI线路
+- DOMAIN-SUFFIX,accounts.x.ai,AI线路
 - DOMAIN-SUFFIX,cn,DIRECT
 - DOMAIN-SUFFIX,qq.com,DIRECT
 - DOMAIN-SUFFIX,baidu.com,DIRECT

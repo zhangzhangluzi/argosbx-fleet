@@ -20,9 +20,9 @@ flowchart LR
 从 GitHub Release 下载版本包和 SHA256SUMS，核验后运行：
 ```sh
 sha256sum -c SHA256SUMS
-python3 install.py argosbx-fleet-v1.1.5.tar.gz --sha256 <已核对的SHA256>
+python3 install.py argosbx-fleet-v1.1.6.tar.gz --sha256 <已核对的SHA256>
 ```
-安装到 `/opt/argosbx-fleet/v1.1.5`，原子更新 `current` 符号链接。同一版本内容不可覆盖。升级使用相同命令；数据与凭据不在发布包内。
+安装到 `/opt/argosbx-fleet/v1.1.6`，原子更新 `current` 符号链接。同一版本内容不可覆盖。升级使用相同命令；数据与凭据不在发布包内。
 ## 配置入口
 复制 `templates/servers.example.json` 到私有路径，设置权限 0600；通过 `ARGOSBX_SERVERS_FILE` 指定。`ARGOSBX_WORKSPACE` 用于解析相对 SSH 路径；`ARGOSBX_STATE` 为计划和恢复日志目录。设置 `coordinator` 为运行 Sub-Store 的服务器 ID，使用该机原生 `flock` 排除跨工作站同时发布。每次 Sub-Store 请求前后检查锁连接；检测到连接断开就停止写入并保留恢复日志。它不提供服务端数据库 fencing，已在途的请求仍须回读确认。
 初次接管现有安装：向各 VPS `agent.py adopt` 标准输入传递 `{server_id, services}`；services 是原生配置完整路径到 systemd unit 的映射。程序读取实际端口、TLS 参数、凭据和源节点，校验两个内核并确认接管前后正式节点等价，再保存 `/etc/argosbx-fleet/server.json`。同类协议存在多个入站时拒绝自动猜测；需要先明确映射。
@@ -112,3 +112,7 @@ AnyTLS、Hysteria2、Hysteria2 Salamander 的 TLS 终止在 VPS，本机原生 X
 已安装并登录 Tailscale 的客户端，可在私有 `servers.json` 增加 `"tailscale": {"magic_dns_suffix": "tail-example.ts.net"}`；填入 `tailscale status --json` 返回的 `CurrentTailnet.MagicDNSSuffix`，不用时省略此项。此配置只影响客户端订阅，不会在 VPS 安装 Tailscale 或更改 ACL。
 Clash/FlClash、Stash 将这个具体 Tailnet 域名交给本机 MagicDNS `100.100.100.100`，从 Fake-IP 排除，并将 `100.64.0.0/10` 与 `fd7a:115c:a1e0::/48` 直连。仅 MagicDNS 本机地址先于明文 DNS 拦截；其他公网或 Tailnet DNS 的 53 端口仍拦截。Mihomo 同时排除这两个 TUN 网段，Stash 不下发不兼容的 Mihomo TUN 字段。不会把整个 `ts.net` 或 Tailscale 公网网站直连，也不会把私有域名送给公共 DNS。
 这些规则依赖设备实际可访问自己的 Tailnet；不替代 Tailscale 登录，也不能让 iOS 上两个互斥的 VPN 同时运行。未连接 Tailnet 时只影响该私有域名，不设置公共 DNS 回退。参见 [Mihomo no-resolve](https://wiki.metacubex.one/config/rules/#no-resolve)、[Tailscale MagicDNS](https://tailscale.com/docs/features/magicdns) 和 [Stash DNS 策略](https://stash.wiki/features/dns-server)。
+
+## AI 专用入口补齐
+NotebookLM (`notebooklm.google` 与当前跳转目标 `notebook.google`)、Copilot (`copilot.microsoft.com`、`copilot.com`、`copilot.cloud.microsoft`)、Grok (`grok.com`、`grok.x.ai`、`accounts.x.ai`) 的专用域名和子域名跟随 `AI线路`。Clash / Stash / Shadowrocket 的 AI 规则集保持一致，原 NotebookLM `.google.com` 入口继续保留。仅增加这些专用域名，不将整个 Google、Microsoft、Bing、X 平台或通用账户域名改为 AI 分流；去广告优先级与 DNS 策略保持不变。
+验证来源：[NotebookLM 入口及重定向](https://notebooklm.google/)、[Copilot 官方入口](https://copilot.com/)、[Grok 入口与账户说明](https://docs.x.ai/grok/faq)。更改 `AI线路` 只影响新建连接；如果仍选择 `日常线路`，AI 会继续跟随日常选择。

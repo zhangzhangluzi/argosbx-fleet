@@ -24,7 +24,8 @@ with patch.object(bootstrap,'unit',unit):bootstrap.install(server,'ci-fixture-on
 assert before=={p:Path(p).read_bytes() for p in before}
 # TLS 1.3 cover server for REALITY and ShadowTLS; never relies on an external website.
 class Handler(http.server.BaseHTTPRequestHandler):
- def do_GET(self):self.send_response(200);self.end_headers();self.wfile.write(b'fleet-native-ok')
+ def do_GET(self):
+  body=b'fleet-native-ok';self.send_response(200);self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body)
  def log_message(self,*args):pass
 plain=http.server.ThreadingHTTPServer(('127.0.0.1',25889),Handler)
 cover=http.server.ThreadingHTTPServer(('127.0.0.1',25888),Handler)
@@ -70,7 +71,7 @@ def probe_https(port):
  context=ssl.create_default_context(cafile=server['certificates']['domain']['certificate_file'])
  with raw,context.wrap_socket(raw,server_hostname='ci.example.com') as stream:
   stream.sendall(b'GET / HTTP/1.1\r\nHost: ci.example.com\r\nConnection: close\r\n\r\n')
-  response=probe.http.client.HTTPResponse(stream);response.begin();assert response.read()==b'fleet-native-ok'
+  response=probe.http.client.HTTPResponse(stream);response.begin();assert response.status==200 and response.read()==b'fleet-native-ok'
  return '127.0.0.1'
 def probe_udp(port):
  stream,relay=probe.socks(port,'0.0.0.0',0,True)

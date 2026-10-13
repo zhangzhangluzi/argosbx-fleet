@@ -136,7 +136,9 @@ def stage(config, payload):
         if set(sr_names)!=set(expected):raise ValueError('Shadowrocket 分组与实际节点不一致')
         rendered['shadowrocket-config']=digest(sr)
         for country in payload['collections'][1:]:
-            col=copy.deepcopy(country);col['name']=prefix+'-'+country['name'];col['process']=[]
+            col=copy.deepcopy(country);col['name']=prefix+'-'+country['name']
+            for op in col['process']:
+                if op['type']=='Response Transformer':op['args']['arguments']['profile']=prefix+'-clash'
             col['subscriptions']=[aliases[n] for n in country['subscriptions']]
             creating('collection',col['name']);request(config,'/api/collections',col,'POST')
             value=yaml.safe_load(request(config,'/download/collection/'+col['name']+'?target=ClashMeta',raw=True))

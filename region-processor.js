@@ -26,7 +26,7 @@ function operator(proxies) {
         if(n['xhttp-opts']?.path!==spec.protocols[id].path || n['xhttp-opts']?.mode!==spec.protocols[id].mode)throw new Error('XHTTP configuration mismatch');
         n['xhttp-opts'].host=host;
       }
-      result.push({...n, name:spec.name+'-T-'+(kind==='xhttp'?'CF入口-VLESS-XHTTP-TLS':'CF入口-VMess-WS-TLS')+(id===kind?'':'@'+id), 'skip-cert-verify':false});
+      result.push({...n, name:spec.name+'-T-'+(kind==='xhttp'?'CF-VLESS-XHTTP-TLS':'CF-VMess-WS-TLS')+(id===kind?'':'@'+id), 'skip-cert-verify':false});
       continue;
     }
     let protocol;
@@ -61,7 +61,7 @@ function operator(proxies) {
   }
   if (!result.length || new Set(result.map(p=>p.name)).size !== result.length) throw new Error('Invalid ArgoSBX node set');
   // Keep stable display order and the initial choice before automatic testing.
-  const order = ['VLESS-REALITY-Vision','Hysteria2','CF入口-VMess-WS-TLS','AnyTLS','SS2022-ShadowTLS-v3','Hysteria2-Salamander','CF入口-VLESS-XHTTP-TLS'];
+  const order = ['VLESS-REALITY-Vision','Hysteria2','CF-VMess-WS-TLS','AnyTLS','SS2022-ShadowTLS-v3','Hysteria2-Salamander','CF-VLESS-XHTTP-TLS'];
   const rank = n => order.findIndex(p => n.split('@')[0].endsWith('-'+p));
   result.sort((a,b) => rank(a.name)-rank(b.name));
   return result;

@@ -4,7 +4,7 @@ import ipaddress
 import re
 
 IDS=('reality','hy2','cf','anytls','shadowtls','salamander','xhttp')
-LABELS={'reality':'VLESS-REALITY-Vision','hy2':'Hysteria2','cf':'CF入口-VMess-WS-TLS','anytls':'AnyTLS','shadowtls':'SS2022-ShadowTLS-v3','salamander':'Hysteria2-Salamander','xhttp':'CF入口-VLESS-XHTTP-TLS'}
+LABELS={'reality':'VLESS-REALITY-Vision','hy2':'Hysteria2','cf':'CF-VMess-WS-TLS','anytls':'AnyTLS','shadowtls':'SS2022-ShadowTLS-v3','salamander':'Hysteria2-Salamander','xhttp':'CF-VLESS-XHTTP-TLS'}
 FIELDS={'type','enabled','port','sni','certificate','cover_host','cover_port','listen','padding_scheme','ws_path','alpn','client','path','mode'}
 CLIENT_FIELDS={'idle-session-check-interval','idle-session-timeout','min-idle-session','fast-open','client-fingerprint','udp-over-tcp','udp-over-tcp-version'}
 CLIENT_BY_TYPE={
@@ -196,6 +196,7 @@ def export(configs,state):
         p=state['protocols'][ident];kind=protocol_type(ident,p)
         if not p['enabled']:continue
         b=state['bindings'][ident];n=entry(configs[b['path']],b);node=copy.deepcopy(template)
+        if kind in ('cf','xhttp'):node['name']=node['name'].replace('CF入口-','CF-')
         for key in CLIENT_FIELDS:node.pop(key,None)
         node.update(p.get('client',{}));node['port']=p['port']
         if kind=='reality':

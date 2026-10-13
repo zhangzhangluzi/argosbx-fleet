@@ -77,7 +77,7 @@ class InventoryTests(unittest.TestCase):
         result=subprocess.run(['node','-e',js],check=True,text=True,capture_output=True)
         actual=json.loads(result.stdout)
         cf=next(n for n in actual if n['type']=='vmess')
-        self.assertEqual(cf['name'],'JP2-T-CF入口-VMess-WS-TLS')
+        self.assertEqual(cf['name'],'JP2-T-CF-VMess-WS-TLS')
         self.assertEqual(cf['server'],s['domains']['cf'])
         self.assertEqual(cf['servername'],cf['server'])
         self.assertEqual(cf['ws-opts']['headers']['Host'],cf['server'])

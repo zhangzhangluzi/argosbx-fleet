@@ -14,6 +14,14 @@ FEISHU = ['feishu.cn','feishucdn.com']
 # These are advertiser consoles, not ad-delivery endpoints for this profile.
 # Keep the allowlist exact so unrelated SDK and tracking hosts remain blockable.
 BUSINESS_CONSOLES = ['ads.applovin.com', 'ads.tiktok.com']
+# Verified public console pages, their UI bundles and application bootstrap API.
+# Do not include platform-wide suffixes, telemetry or conversion endpoints.
+DOMESTIC_BUSINESS_HOSTS = [
+    'e.qq.com', 'ad.qq.com',
+    'ad.e.kuaishou.com', 'ad-m.e.kuaishou.com', 'dapi.e.kuaishou.com',
+    'p4-ad.adkwai.com', 'p5-ad.adkwai.com',
+    'lf3-ad-platform.byteadverts.com',
+]
 LOCAL_DOH = 'https://223.6.6.6/dns-query'
 DNS_DOMAINS = ['dns.alidns.com', 'doh.pub', 'dot.pub', 'dns.google',
                'cloudflare-dns.com', 'one.one.one.one', 'dns.quad9.net']
@@ -28,6 +36,7 @@ def guarded_rules(original):
     guards = ['DST-PORT,53,REJECT', 'DST-PORT,853,日常线路']
     guards += ['DOMAIN-SUFFIX,'+d+',DIRECT' for d in FEISHU]
     guards += ['DOMAIN,'+d+',日常线路' for d in BUSINESS_CONSOLES]
+    guards += ['DOMAIN,'+d+',DIRECT' for d in DOMESTIC_BUSINESS_HOSTS]
     guards += ['IP-CIDR,223.6.6.6/32,DIRECT,no-resolve']
     guards += ['DOMAIN,' + d + ',日常线路' for d in DNS_DOMAINS]
     guards += ['IP-CIDR,' + ip + '/32,日常线路,no-resolve' for ip in DNS_IPS]
@@ -63,6 +72,8 @@ def harden_config(original, client, hosts=None):
         dns['proxy-server-nameserver'] = list(BOOTSTRAP)
         dns['nameserver-policy'] = {**{'+.'+d:list(REMOTE) for d in ['googleapis.cn','xn--ngstr-lra8j.com']}, **{'+.'+d:[LOCAL_DOH] for d in FEISHU}, **{d:list(REMOTE) for d in BUSINESS_CONSOLES}, '+.cn':[LOCAL_DOH], 'geosite:cn':[LOCAL_DOH]}
         dns['follow-rule'] = True
+    dns['nameserver-policy'].update({d: [LOCAL_DOH + ('#DIRECT' if client == 'clash' else '')]
+                                    for d in DOMESTIC_BUSINESS_HOSTS})
     return config
 
 

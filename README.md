@@ -20,9 +20,9 @@ flowchart LR
 从 GitHub Release 下载版本包和 SHA256SUMS，核验后运行：
 ```sh
 sha256sum -c SHA256SUMS
-python3 install.py argosbx-fleet-v1.1.2.tar.gz --sha256 <已核对的SHA256>
+python3 install.py argosbx-fleet-v1.1.3.tar.gz --sha256 <已核对的SHA256>
 ```
-安装到 `/opt/argosbx-fleet/v1.1.2`，原子更新 `current` 符号链接。同一版本内容不可覆盖。升级使用相同命令；数据与凭据不在发布包内。
+安装到 `/opt/argosbx-fleet/v1.1.3`，原子更新 `current` 符号链接。同一版本内容不可覆盖。升级使用相同命令；数据与凭据不在发布包内。
 ## 配置入口
 复制 `templates/servers.example.json` 到私有路径，设置权限 0600；通过 `ARGOSBX_SERVERS_FILE` 指定。`ARGOSBX_WORKSPACE` 用于解析相对 SSH 路径；`ARGOSBX_STATE` 为计划和恢复日志目录。设置 `coordinator` 为运行 Sub-Store 的服务器 ID，使用该机原生 `flock` 排除跨工作站同时发布。每次 Sub-Store 请求前后检查锁连接；检测到连接断开就停止写入并保留恢复日志。它不提供服务端数据库 fencing，已在途的请求仍须回读确认。
 初次接管现有安装：向各 VPS `agent.py adopt` 标准输入传递 `{server_id, services}`；services 是原生配置完整路径到 systemd unit 的映射。程序读取实际端口、TLS 参数、凭据和源节点，校验两个内核并确认接管前后正式节点等价，再保存 `/etc/argosbx-fleet/server.json`。同类协议存在多个入站时拒绝自动猜测；需要先明确映射。
@@ -87,3 +87,14 @@ python3 servers.py publish
 协议计划与应用前均检查真实端口绑定，避免占用 SSH、Caddy 或其他服务；同协议新增入口仍使用独立标识。直连入站禁止回环/组播监听，导出按监听地址族生成 v4/v6；Xray 的未指定地址行为与 sing-box 分别处理。CF 回环地址族同步到隧道目标，WS 仅接受纯路径；域名迁移只更新显式关联的 CF 引用，独立域名保留。
 新机安装中断可原命令续装；如有未完成发布事务，先运行 `servers.py recover`。验收失败不转为 active，已有服务器照常发布。
 `ads.applovin.com`、`ads.tiktok.com` 精确匹配到日常线路，优先于去广告规则；不放行整个 AppLovin/TikTok 域名树。Clash、Stash、Shadowrocket 同步生成，前两者同步显式 DNS 策略。
+
+## 去广告与投放后台例外
+Clash/FlClash、Stash 使用 MetaCubeX `category-ads-all.mrs` 域名表，每 86400 秒更新。规则从上到下首次匹配：精确后台例外优先；命中广告表后交给“去广告”选择组，开启执行 REJECT，关闭转日常线路。例外和 DNS 策略由 `dns_policy.py` 一处生成，保持发布与导出一致。Shadowrocket 当前没有这套可选广告表，仅同步精确路由例外。
+2026-10-13 对常见投放后台的公开入口、重定向和界面资源核查后，增加以下精确 DIRECT 例外及国内 DoH，不放行平台父域名：
+- `e.qq.com`、`ad.qq.com`：腾讯营销入口、投放平台与同源资源。
+- `ad.e.kuaishou.com`、`ad-m.e.kuaishou.com`：磁力智投电脑和手机版后台。
+- `dapi.e.kuaishou.com`：后台 HTML 明确预加载的应用信息接口。
+- `p4-ad.adkwai.com`、`p5-ad.adkwai.com`：后台页面实际引用的 React、界面脚本与样式 CDN。
+- `lf3-ad-platform.byteadverts.com`：巨量引擎登录页必需的导航和配置脚本。
+保留 AppLovin Ads/TikTok Ads 精确日常线路例外；Google 转化脚本、AppLovin SDK 和快手性能日志端点不加入例外。未命中广告表的其他后台无需额外放行。公开入口和资源验收不等于登录后所有私有 API 已验证。
+这是域名连接拦截，无 HTTPS 解密、页面元素过滤或 URL 路径匹配，不能区分同域名下的后台资源与广告，也不能保证去除同源视频广告。不能因域名含 `ads` 就直接拒绝，也不能为修复后台而放行整个 SDK 域名树。

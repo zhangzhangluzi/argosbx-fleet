@@ -45,7 +45,7 @@ def provision(cf,server,zone,journal):
     if not j.get('routed'):
         wanted={'ingress':routes(server)}
         cf.call(endpoint+'/configurations',{'config':wanted},'PUT')
-        if cf.call(endpoint+'/configurations')['result']['config']!=wanted:raise ValueError('CF 隧道配置回读不一致')
+        if cf.call(endpoint+'/configurations')['result']['config'].get('ingress')!=wanted['ingress']:raise ValueError('CF 隧道配置回读不一致')
         j['routed']=True;save(journal,j)
     dns_journal=journal.with_suffix('.dns.json')
     if not j.get('dns_ready'):

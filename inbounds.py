@@ -12,7 +12,7 @@ def x25519(binary='/root/agsbx/xray'):
     p=subprocess.run([binary,'x25519'],text=True,capture_output=True,check=True,timeout=10)
     values=dict(line.split(':',1) for line in p.stdout.splitlines() if ':' in line)
     private=(values.get('PrivateKey') or values.get('Private key') or '').strip()
-    public=(values.get('Password') or values.get('PublicKey') or values.get('Public key') or '').strip()
+    public=(values.get('Password (PublicKey)') or values.get('Password') or values.get('PublicKey') or values.get('Public key') or '').strip()
     if not private or not public:raise ValueError('Xray 未返回完整 X25519 密钥对')
     return private,public
 

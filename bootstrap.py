@@ -118,6 +118,8 @@ def install(server,connector_token,test_certificate=False):
             config={p:({'log':{'loglevel':'warning'},'inbounds':[],'outbounds':[{'protocol':'freedom','tag':'direct'}]} if e['core']=='xray' else {'log':{'level':'warn'},'inbounds':[],'outbounds':[{'type':'direct','tag':'direct'}]}) for p,e in paths.items()}
             state={'schema':1,'server_id':server['id'],'bindings':{},'templates':{},'protocols':{},'certificates':server['certificates'],'engines':paths}
             config,state,_=reconcile(config,state,server['protocols']);config=render(config,state,server['protocols'])
+            from ech import configure
+            configure(config,state)
             j['candidate']={'configs':config,'state':state};save(JOURNAL,j)
         config=j['candidate']['configs'];state=j['candidate']['state'];agent.validate_native(state,config)
         for p,c in config.items():save(p,c)

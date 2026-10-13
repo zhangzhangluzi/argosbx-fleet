@@ -37,7 +37,7 @@ def verify_new_server(config,server,nodes):
     groups=observers(config,server,cases(server,nodes))
     # Pass code and private credentials over SSH stdin; nothing is persisted remotely.
     source=(Path(__file__).parent/'probe.py').read_text()
-    wrapper="import json,sys;p=json.load(sys.stdin);ns={'__name__':'fleet_probe'};exec(compile(p['code'],'fleet-probe','exec'),ns);print(json.dumps(ns['verify'](p['cases'])))"
+    wrapper="import json,sys;sys.path.insert(0,'/opt/argosbx-fleet/current');p=json.load(sys.stdin);ns={'__name__':'fleet_probe'};exec(compile(p['code'],'fleet-probe','exec'),ns);print(json.dumps(ns['verify'](p['cases'])))"
     import shlex
     results=[]
     for peer,checks in groups.items():

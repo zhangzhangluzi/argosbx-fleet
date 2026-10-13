@@ -197,5 +197,8 @@ def export(configs,state):
         elif kind=='cf':
             node.update(port=443,server=p['sni'],servername=p['sni'],uuid=n['settings']['clients'][0]['id'])
             node['ws-opts'].update(path=p['ws_path']);node['ws-opts'].setdefault('headers',{})['Host']=p['sni']
+        from ech import client_options
+        node.pop('ech-opts',None)
+        node.update(client_options(state,ident,n))
         result.append(node)
     return {'proxies':result}

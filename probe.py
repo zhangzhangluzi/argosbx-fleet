@@ -21,6 +21,13 @@ def outbound(n):
         extras=[{'type':'shadowtls','tag':'shadow','server':n['server'],'server_port':n['port'],'version':3,'password':p['password'],'tls':{'enabled':True,'server_name':p['host'],'utls':{'enabled':True,'fingerprint':'chrome'}}}]
         if n.get('_certificate_path'):extras[0]['tls']['certificate_path']=n['_certificate_path']
     else:raise ValueError('不支持的验收协议')
+    ech=n.get('ech-opts',{})
+    if ech.get('enable'):
+        from ech import pem_config
+        tls['ech']={'enabled':True}
+        if ech.get('config'):tls['ech']['config']=[pem_config(ech['config'])]
+        if ech.get('query-server-name'):tls['ech']['query_server_name']=ech['query-server-name']
+        if n['type'] in ('vmess','anytls'):tls['utls']={'enabled':True,'fingerprint':n.get('client-fingerprint','chrome')}
     return [out]+extras
 
 def recv(sock,size):
@@ -75,7 +82,9 @@ def check_case(case,binary='/root/agsbx/sing-box',https_check=https,udp_check=ud
         with socket.socket() as sock:sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]
         config={'log':{'level':'error'},'inbounds':[{'type':'socks','listen':'127.0.0.1','listen_port':port}], 'outbounds':outbound(case['node'])}
         # Hostname-based CF ingress must resolve without any local VPN or TUN dependency.
-        config['dns']={'servers':[{'type':'local','tag':'local'}]}
+        config['dns']={'servers':[{'type':'https','tag':'local','server':'223.5.5.5','path':'/dns-query'},
+            {'type':'https','tag':'ech','server':'dns.alidns.com','path':'/dns-query','domain_resolver':'local'}],
+            'rules':[{'domain':['cloudflare-ech.com'],'server':'ech'}],'final':'local'}
         config['route']={'default_domain_resolver':'local'}
         path=root/'client.json';path.write_text(json.dumps(config));path.chmod(0o600)
         with (root/'log').open('w') as log:

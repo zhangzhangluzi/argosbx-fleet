@@ -60,7 +60,11 @@ def plan(desired):
     updated=copy.deepcopy(state)
     if 'certificates' in desired:updated['certificates']=desired['certificates']
     candidate,updated,changes=reconcile(before,updated,desired['protocols'])
-    after=render(candidate,updated,desired['protocols']);validate_native(updated,after)
+    after=render(candidate,updated,desired['protocols'])
+    updated['protocols']=desired['protocols']
+    from ech import configure
+    configure(after,updated)
+    validate_native(updated,after)
     from listeners import check
     check(before,after)
     updated['protocols']=desired['protocols']
@@ -103,7 +107,7 @@ def restore(allow_restart=False):
         export_source(_applying=True)
     PLAN.unlink(missing_ok=True);JOURNAL.unlink();return {'recovery':'restored'}
 
-def apply(allow_restart=False):
+def apply(allow_restart=False,defer_commit=False):
     if JOURNAL.exists():raise ValueError('有未完成事务，请先 recover')
     p=json.loads(PLAN.read_text());state=load()
     if state!=p['state_before']:raise ValueError('计划已过期')
@@ -135,7 +139,18 @@ def apply(allow_restart=False):
         save(STATE,updated);export_source(_applying=True)
     except Exception:
         restore(allow_restart=allow_restart);raise
-    JOURNAL.unlink();PLAN.unlink();return {'applied':True,'restarted':p['services']}
+    if not defer_commit:commit()
+    return {'applied':True,'restarted':p['services'],'verification_pending':defer_commit}
+
+def commit():
+    if not JOURNAL.exists():raise ValueError('没有待提交的原生事务')
+    j=json.loads(JOURNAL.read_text());state=load()
+    if state!=j['state_after']:raise ValueError('验收期间登记状态被修改')
+    if any(sha(Path(p).read_text())!=h for p,h in state['native_sha256'].items()):raise ValueError('验收期间原生配置被修改')
+    if not TARGET.exists() or TARGET.read_text()!=j['source']['after']:raise ValueError('验收期间订阅源被修改')
+    for service in {b['service'] for ident,b in state['bindings'].items() if state['protocols'][ident]['enabled']}:cmd(['systemctl','is-active','--quiet',service])
+    JOURNAL.unlink();PLAN.unlink(missing_ok=True)
+    return {'committed':True}
 
 def export_source(_applying=False):
     if JOURNAL.exists() and not _applying:raise ValueError('未完成事务，保留上一份订阅；请先 recover')
@@ -219,7 +234,7 @@ def certificate_recover():
     journal.unlink();return {'recovered':True}
 
 def main():
-    p=argparse.ArgumentParser();p.add_argument('command',choices=['adopt','inspect','plan','planned','apply','recover','export','certificate','certificate-recover']);p.add_argument('--allow-restart',action='store_true');a=p.parse_args()
+    p=argparse.ArgumentParser();p.add_argument('command',choices=['adopt','inspect','plan','planned','apply','commit','recover','export','certificate','certificate-recover']);p.add_argument('--allow-restart',action='store_true');p.add_argument('--defer-commit',action='store_true');a=p.parse_args()
     with lock(HOME/'agent.lock'):
         if a.command=='adopt':r=initialize(json.load(sys.stdin))
         elif a.command=='inspect':
@@ -231,7 +246,8 @@ def main():
             r['certificate_health']=certificate_health(s)
         elif a.command=='plan':r=plan(json.load(sys.stdin))
         elif a.command=='planned':r=planned()
-        elif a.command=='apply':r=apply(a.allow_restart)
+        elif a.command=='apply':r=apply(a.allow_restart,a.defer_commit)
+        elif a.command=='commit':r=commit()
         elif a.command=='recover':r=restore(a.allow_restart)
         elif a.command=='certificate':r=certificate(json.load(sys.stdin)['hostname'])
         elif a.command=='certificate-recover':r=certificate_recover()

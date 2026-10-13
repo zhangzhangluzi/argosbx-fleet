@@ -19,6 +19,26 @@ async function transformFunction(res, context) {
   const isMihomo = target
     ? ['meta', 'clashmeta', 'clash.meta', 'mihomo'].includes(target)
     : ua === 'meta' || ua.includes('flclash') || ua.includes('clash-verge') || (ua.includes('clash') && ua.includes('meta'));
+  // Sub-Store's legacy VMess JSON URI omits ECH. Reuse its native query
+  // serializer, which supports ECH, for our verified AEAD VMess WS entrances.
+  if (target === 'uri') {
+    const hosts = new Set(CF_HOSTS);
+    res.body = res.body.split('\n').map(line => {
+      if (!line.startsWith('vmess://')) return line;
+      const p = ProxyUtils.parse(line)[0];
+      if (!p || !hosts.has(p.server)) return line;
+      if (p.network !== 'ws' || !p.tls || Number(p.alterId || 0) !== 0) {
+        throw new Error('Unexpected Cloudflare VMess URI');
+      }
+      const uri = ProxyUtils.produce([{...p, type: 'vless', flow: undefined,
+        encryption: p.cipher || 'auto', 'client-fingerprint': 'chrome',
+        'ech-opts': {enable: true, 'query-server-name': 'cloudflare-ech.com',
+          _dns: 'https://dns.alidns.com/dns-query'}}], 'URI');
+      if (!uri.startsWith('vless://') || !uri.includes('ech=')) throw new Error('ECH URI conversion failed');
+      return uri.replace(/^vless:\/\//, 'vmess://');
+    }).join('\n');
+    delete res.headers['content-length'];
+  }
   if (!isMihomo) return res;
 
   const source = ProxyUtils.yaml.safeLoad(res.body);

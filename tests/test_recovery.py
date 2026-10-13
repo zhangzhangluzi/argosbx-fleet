@@ -86,6 +86,19 @@ class RecoveryTests(unittest.TestCase):
                 servers.native_preflight({'servers':[s]})
         with patch.object(fleetctl,'remote',return_value=healthy):servers.native_preflight({'servers':[s]})
 
+    def test_commit_preserves_recovery_on_drift_then_clears_after_readback(self):
+        self.after.update(native_sha256={str(self.native):agent.sha('new')},
+                          bindings={'x':{'service':'x.service'}},protocols={'x':{'enabled':True}})
+        save(agent.STATE,self.after);save(agent.JOURNAL,self.j)
+        self.native.write_text('external')
+        with patch.object(agent,'cmd') as command:
+            with self.assertRaises(ValueError):agent.commit()
+            self.assertTrue(agent.JOURNAL.exists());command.assert_not_called()
+            self.native.write_text('new')
+            self.assertEqual(agent.commit(),{'committed':True})
+            command.assert_called_once_with(['systemctl','is-active','--quiet','x.service'])
+        self.assertFalse(agent.JOURNAL.exists());self.assertFalse(agent.PLAN.exists())
+
 
 class ParameterTests(unittest.TestCase):
     def test_cleared_client_option_and_alpn_do_not_reappear_from_template(self):

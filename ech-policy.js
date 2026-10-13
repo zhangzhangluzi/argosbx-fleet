@@ -8,7 +8,7 @@ function applyCfEch(proxies) {
         p.servername !== p.server || p['reality-opts']) {
       throw new Error('Unexpected Cloudflare TLS entrance');
     }
-    return {...p, 'skip-cert-verify': false,
-      'ech-opts': {enable: true, 'query-server-name': p.servername}};
+    return {...p, 'skip-cert-verify': false, 'client-fingerprint': 'chrome',
+      'ech-opts': {enable: true, 'query-server-name': 'cloudflare-ech.com'}};
   });
 }

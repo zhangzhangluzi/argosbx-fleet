@@ -57,6 +57,8 @@ def harden_config(original, client, hosts=None):
     if client == 'clash':
         dns['nameserver'] = [u + '#日常线路' for u in REMOTE]
         dns['proxy-server-nameserver'] = [u + '#DIRECT' for u in BOOTSTRAP]
+        from ech import PUBLIC_NAME, DNS
+        dns['proxy-server-nameserver-policy'] = {PUBLIC_NAME: [DNS+'#DIRECT']}
         dns.pop('direct-nameserver', None)
         dns.pop('direct-nameserver-follow-policy', None)
         dns['nameserver-policy'] = {**{'+.'+d:[u+'#日常线路' for u in REMOTE] for d in ['googleapis.cn','xn--ngstr-lra8j.com']}, **{'+.'+d:[LOCAL_DOH+'#DIRECT'] for d in FEISHU}, **{d:[u+'#日常线路' for u in REMOTE] for d in BUSINESS_CONSOLES}, '+.cn':[LOCAL_DOH+'#DIRECT'], 'rule-set:国内域名':[LOCAL_DOH+'#DIRECT']}

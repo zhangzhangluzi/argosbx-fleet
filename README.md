@@ -20,9 +20,9 @@ flowchart LR
 从 GitHub Release 下载版本包和 SHA256SUMS，核验后运行：
 ```sh
 sha256sum -c SHA256SUMS
-python3 install.py argosbx-fleet-v1.1.3.tar.gz --sha256 <已核对的SHA256>
+python3 install.py argosbx-fleet-v1.1.4.tar.gz --sha256 <已核对的SHA256>
 ```
-安装到 `/opt/argosbx-fleet/v1.1.3`，原子更新 `current` 符号链接。同一版本内容不可覆盖。升级使用相同命令；数据与凭据不在发布包内。
+安装到 `/opt/argosbx-fleet/v1.1.4`，原子更新 `current` 符号链接。同一版本内容不可覆盖。升级使用相同命令；数据与凭据不在发布包内。
 ## 配置入口
 复制 `templates/servers.example.json` 到私有路径，设置权限 0600；通过 `ARGOSBX_SERVERS_FILE` 指定。`ARGOSBX_WORKSPACE` 用于解析相对 SSH 路径；`ARGOSBX_STATE` 为计划和恢复日志目录。设置 `coordinator` 为运行 Sub-Store 的服务器 ID，使用该机原生 `flock` 排除跨工作站同时发布。每次 Sub-Store 请求前后检查锁连接；检测到连接断开就停止写入并保留恢复日志。它不提供服务端数据库 fencing，已在途的请求仍须回读确认。
 初次接管现有安装：向各 VPS `agent.py adopt` 标准输入传递 `{server_id, services}`；services 是原生配置完整路径到 systemd unit 的映射。程序读取实际端口、TLS 参数、凭据和源节点，校验两个内核并确认接管前后正式节点等价，再保存 `/etc/argosbx-fleet/server.json`。同类协议存在多个入站时拒绝自动猜测；需要先明确映射。
@@ -98,3 +98,10 @@ Clash/FlClash、Stash 使用 MetaCubeX `category-ads-all.mrs` 域名表，每 86
 - `lf3-ad-platform.byteadverts.com`：巨量引擎登录页必需的导航和配置脚本。
 保留 AppLovin Ads/TikTok Ads 精确日常线路例外；Google 转化脚本、AppLovin SDK 和快手性能日志端点不加入例外。未命中广告表的其他后台无需额外放行。公开入口和资源验收不等于登录后所有私有 API 已验证。
 这是域名连接拦截，无 HTTPS 解密、页面元素过滤或 URL 路径匹配，不能区分同域名下的后台资源与广告，也不能保证去除同源视频广告。不能因域名含 `ads` 就直接拒绝，也不能为修复后台而放行整个 SDK 域名树。
+
+## ECH 自动策略
+CF 入口固定通过 `https://dns.alidns.com/dns-query` 查询 `cloudflare-ech.com` 的 HTTPS 记录；真实 SNI/Host 与原证书保持一致。Clash 的 ECH 引导 DNS 使用 `proxy-server-nameserver-policy`，不经过待建立的代理。
+AnyTLS、Hysteria2、Hysteria2 Salamander 的 TLS 终止在 VPS，本机原生 Xray/sing-box 自动生成独立 ECH 密钥；外层公开名称同为 `cloudflare-ech.com`，不复用 Cloudflare 的服务端私钥。私钥只保存在原生配置与 0600 事务/登记文件，订阅只携带对应公开 ECHConfigList。重复 plan/export 不轮换密钥，停用再启用保留身份；配置或密钥不一致时阻止导出。无需增加 inventory 参数或用户自定义输入。
+当前 Mihomo 的 REALITY 分支与 ShadowTLS 分支不调用普通 ECH 握手，不能通过增加 `ech-opts` 获得 ECH；维持原生机制并验证连接。Salamander 已混淆整个 QUIC 包，ECH 仍在其中的 TLS 握手启用。Stash 导出保留字段，但缺少官方 ECH 能力声明与本机运行端时，不把它视为已验证 ECH 客户端。
+维护工具安装不重启代理；首次 ECH 启用要通过原生协议计划和允许重启的应用步骤。逐台验收可使用 `agent.py apply --allow-restart --defer-commit` 保留现有恢复日志，外部握手和代理业务通过后 `agent.py commit`；失败用 `agent.py recover --allow-restart`。未提交事务阻止后续导出/发布。
+`tests/echprobe` 使用 Go 原生 TLS、与 sing-box 对应的 QUIC/Salamander 库，从独立服务器检查入口 `ECHAccepted` 和证书验证结果；应同时核对真实客户端 HTTPS/出口/UDP，而不是把代理内部访问网页的 TLS 状态当作入口证据。

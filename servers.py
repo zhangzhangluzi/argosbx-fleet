@@ -38,11 +38,11 @@ def generate(config=None):
     return json.loads((STATE/'substore-payload.json').read_text())
 
 
-def request(config, path, value=None, method=None, raw=False):
+def request(config, path, value=None, method=None, raw=False, user_agent='FlClash/0.8.99'):
     ensure_owned()
     base = config['subscription']['backend_url'].rstrip('/')
     req = urllib.request.Request(base+path, data=None if value is None else json.dumps(value).encode(),
-                                 method=method, headers={'Content-Type':'application/json','User-Agent':'FlClash/0.8.99'})
+                                 method=method, headers={'Content-Type':'application/json','User-Agent':user_agent})
     with urllib.request.urlopen(req, timeout=45) as r: body = r.read().decode()
     ensure_owned()
     if raw: return body
@@ -109,7 +109,7 @@ def stage(config, payload):
         for source in payload['subscriptions']:
             sub=copy.deepcopy(source);sub['name']=aliases[source['name']]
             for op in sub['process']:
-                if op['type']=='Response Transformer':op['args']['arguments']['profile']=prefix+'-clash'
+                if op['type']=='Response Transformer':op['args']['arguments'].update(profile=prefix+'-clash',stash_profile=prefix+'-stash')
             creating('sub',sub['name'])
             request(config,'/api/subs',sub,'POST')
         col=copy.deepcopy(payload['collections'][0]);col['name']=prefix
@@ -138,10 +138,27 @@ def stage(config, payload):
                 sr_names += [x.strip() for x in line.split('= url-test,',1)[1].split(',') if '=' not in x]
         if set(sr_names)!=set(expected):raise ValueError('Shadowrocket 分组与实际节点不一致')
         rendered['shadowrocket-config']=digest(sr)
+        if any(op['type']=='Response Transformer' for op in payload['collections'][0].get('process',[])):
+            # Exercise the actual download route as well as the canonical files.
+            # Native node conversion alone did not verify a full Stash profile.
+            col=copy.deepcopy(payload['collections'][0]);col['name']=prefix
+            col['subscriptions']=[aliases[n] for n in col['subscriptions']]
+            for op in col['process']:
+                if op['type']=='Response Transformer':op['args']['arguments'].update(profile=prefix+'-clash',stash_profile=prefix+'-stash')
+            request(config,'/api/collection/'+prefix,col,'PATCH')
+            for key,(target,ua) in DOWNLOAD_CASES.items():
+                value=yaml.safe_load(request(config,'/download/collection/'+prefix+'?target='+target,raw=True,user_agent=ua))
+                check_profile(value)
+                full=json.loads((STATE/('validated-'+('stash' if target=='Stash' else 'clash')+'.json')).read_text())
+                wanted=full['proxies']
+                if key=='download-stash':wanted=[n for n in wanted if n.get('network')!='xhttp' and not (n['type']=='vless' and n.get('encryption') not in (None,'','none'))]
+                if value['proxies']!=wanted or value['dns']!=full['dns'] or value['rules']!=full['rules']:
+                    raise ValueError('客户端导出丢失节点参数、DNS 或规则：'+key)
+                rendered[key]=digest(value)
         for country in payload['collections'][1:]:
             col=copy.deepcopy(country);col['name']=prefix+'-'+country['name']
             for op in col['process']:
-                if op['type']=='Response Transformer':op['args']['arguments']['profile']=prefix+'-clash'
+                if op['type']=='Response Transformer':op['args']['arguments'].update(profile=prefix+'-clash',stash_profile=prefix+'-stash')
             col['subscriptions']=[aliases[n] for n in country['subscriptions']]
             creating('collection',col['name']);request(config,'/api/collections',col,'POST')
             value=yaml.safe_load(request(config,'/download/collection/'+col['name']+'?target=ClashMeta',raw=True))
@@ -152,6 +169,13 @@ def stage(config, payload):
     finally:
         publication.recover(STAGING,config,get,request,digest)
     return rendered
+
+
+DOWNLOAD_CASES={
+    'download-clash':('ClashMeta','FlClash/0.8.99'),
+    'download-stash':('Stash','Stash/3.4.0'),
+    'download-stash-modern':('Stash','Stash/3.6.0'),
+}
 
 
 def check_profile(value):
@@ -192,6 +216,11 @@ def publish(config):
             if digest(value)!=plan['rendered_sha256'][fmt]:raise ValueError('线上输出与已校验计划不符')
         if digest(request(config,'/api/file/shadowrocket-config',raw=True))!=plan['rendered_sha256']['shadowrocket-config']:
             raise ValueError('Shadowrocket 策略与已校验计划不符')
+        for key,(target,ua) in DOWNLOAD_CASES.items():
+            if key not in plan['rendered_sha256']:continue
+            value=yaml.safe_load(request(config,'/download/collection/all?target='+target,raw=True,user_agent=ua))
+            check_profile(value)
+            if digest(value)!=plan['rendered_sha256'][key]:raise ValueError('客户端导出与已校验计划不符：'+key)
         for name,wanted in plan['rendered_sha256'].items():
             if not name.startswith('shadowrocket-') or name=='shadowrocket-config':continue
             value=request(config,'/download/collection/'+name+'?target=URI',raw=True)

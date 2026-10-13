@@ -37,6 +37,10 @@ python3 servers.py publish
 启停监听、修改端口等需要原生服务重启；默认拒绝修改。只有明确维护窗口才使用 `protocol-apply --allow-restart`。普通参数计划、订阅调整、导出器升级均不重启代理。`enabled=false` 会从服务端和订阅同时移除该入口；已有凭据保留在私有接管状态中，便于再次启用。
 ## 发布与恢复
 `servers.py plan` 创建随机命名的临时 Sub-Store 对象，使用原生转换器校验 Clash、Stash 和 Shadowrocket 分组，随后删除。`publish` 检查输入和每个线上对象未被修改，记录写前日志后更新并回读原统一地址。它是可恢复的多对象发布，不是 Sub-Store 数据库级原子事务。
+
+Sub-Store 的 `/download/collection/all` 和单服务器导出会按客户端返回完整配置：FlClash 使用 Clash 模板，Stash 使用独立 Stash 模板，包含分组、分流、DNS 与去广告。可以用 `target=Stash` 明确指定格式，URL 路径中的目标优先于查询参数和 User-Agent。Stash 请求会根据版本决定是否包含 XHTTP／VLESS Encryption（iOS/tvOS ≥ 3.6、macOS ≥ 4.3）；旧版或无法识别版本时，使用不含这类节点的 3.4 兼容集合，其余节点及规则保留，国家组随实际节点重建。服务端不会移除协议入口，也不会改写加密凭据。版本依据为 [Stash 官方协议说明](https://stash.wiki/proxy-protocols/proxy-types#xhttp)。`/api/file/stash` 仍是包含全部协议的规范模板，直接使用它需要支持全部节点的版本。
+
+发布校验同时覆盖规范模板和实际下载地址，检查 Stash 兼容集合、现代 Stash 全节点配置及 FlClash 输出。不能用 Mihomo 解析成功代替 iPhone Stash 真机验收。
 进程或网络中断后运行 `servers.py recover`，按线上内容恢复本次写入并清理临时对象。恢复前先核对所有待恢复对象，遇到第三方修改保留日志并拒绝开始覆盖。临时对象按资源清单核对存在性，已删除、未创建或删除响应丢失均可重复恢复，清理进度逐项落盘。日志0600、原子替换并 fsync；成功后删除，不长期累计备份。不要绕过工具在发布期间编辑同一 Sub-Store 对象。
 服务器端未完成的协议事务由 `fleetctl.py protocol-recover --server jp` 恢复；已尝试重启过的服务在恢复时也会重启，未重启过的事务不会触发服务重启。恢复命令也默认拒绝重启，只有明确指定 `--allow-restart` 才会恢复已重启的服务；恢复前统一核对原生文件、登记状态和订阅源，存在外部修改时整次停止。恢复同时还原源文件和读取权限，清除过期计划；未恢复事务会阻止定时导出和发布。
 ## 域名迁移

@@ -116,3 +116,19 @@ class CFRouteChangeTests(unittest.TestCase):
         self.assertEqual(len(planned['after']['ingress']),4)
         self.assertEqual(planned['after']['ingress'][-2:],cf.config['ingress'][-2:])
         self.assertEqual(planned['records'],[])
+
+class PlanIdentityTests(unittest.TestCase):
+    def test_read_plan_keeps_generated_identity_and_rejects_stale_state(self):
+        import agent
+        with tempfile.TemporaryDirectory() as tmp:
+            state=Path(tmp)/'state';plan=Path(tmp)/'plan';journal=Path(tmp)/'journal'
+            original={'protocols':{'fixture':{}},'certificates':{}}
+            candidate={'protocols':{'fixture':{},'new':{'type':'anytls'}},'certificates':{},'templates':{'new':{'password':'private-random-identity'}}}
+            save(state,original);save(plan,{'state_before':original,'state_after':candidate,'files':[],'services':['isolated.service']})
+            before=plan.read_bytes()
+            with patch.object(agent,'STATE',state),patch.object(agent,'PLAN',plan),patch.object(agent,'JOURNAL',journal):
+                self.assertEqual(agent.planned()['protocols'],candidate['protocols'])
+                self.assertEqual(before,plan.read_bytes())
+                self.assertNotIn('private-random-identity',json.dumps(agent.planned()))
+                save(state,{'changed':True})
+                with self.assertRaises(ValueError):agent.planned()

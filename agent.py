@@ -68,6 +68,13 @@ def plan(desired):
     save(PLAN,{'state_before':state,'state_after':updated,'files':files,'services':services})
     return {'changed_files':len(files),'restart_required':services,'subscription_only':not files and updated!=state,**changes}
 
+def planned():
+    if JOURNAL.exists():raise ValueError('有未完成原生事务，先 recover')
+    p=json.loads(PLAN.read_text())
+    if load()!=p['state_before']:raise ValueError('已校验计划过期，请重新 protocol-plan')
+    return {'protocols':p['state_after']['protocols'],'certificates':p['state_after']['certificates'],
+            'previous_protocols':p['state_before']['protocols'],'restart_required':p['services']}
+
 def restore(allow_restart=False):
     if not JOURNAL.exists():return {'recovery':'nothing'}
     j=json.loads(JOURNAL.read_text());fail=[]
@@ -206,7 +213,7 @@ def certificate_recover():
     journal.unlink();return {'recovered':True}
 
 def main():
-    p=argparse.ArgumentParser();p.add_argument('command',choices=['adopt','inspect','plan','apply','recover','export','certificate','certificate-recover']);p.add_argument('--allow-restart',action='store_true');a=p.parse_args()
+    p=argparse.ArgumentParser();p.add_argument('command',choices=['adopt','inspect','plan','planned','apply','recover','export','certificate','certificate-recover']);p.add_argument('--allow-restart',action='store_true');a=p.parse_args()
     with lock(HOME/'agent.lock'):
         if a.command=='adopt':r=initialize(json.load(sys.stdin))
         elif a.command=='inspect':
@@ -217,6 +224,7 @@ def main():
             r['source_matches']=TARGET.exists() and yaml.safe_load(TARGET.read_text())==export(configs(s),s) if r['native_configuration_matches'] else False
             r['certificate_health']=certificate_health(s)
         elif a.command=='plan':r=plan(json.load(sys.stdin))
+        elif a.command=='planned':r=planned()
         elif a.command=='apply':r=apply(a.allow_restart)
         elif a.command=='recover':r=restore(a.allow_restart)
         elif a.command=='certificate':r=certificate(json.load(sys.stdin)['hostname'])

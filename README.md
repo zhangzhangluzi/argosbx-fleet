@@ -1,5 +1,5 @@
 # ArgoSBX Fleet
-维护已有 ArgoSBX + Cloudflare Tunnel + Sub-Store 安装。支持多机协议参数、订阅生成、发布恢复及增量域名迁移。代理内核继续由原生 systemd 服务运行，不依赖 Ti、3x-ui、Docker 或新增常驻管理进程。
+初始化与维护 ArgoSBX + Cloudflare Tunnel + Sub-Store 安装。支持多机协议参数、订阅生成、发布恢复及增量域名迁移。代理内核继续由原生 systemd 服务运行，不依赖 Ti、3x-ui、Docker 或新增常驻管理进程。
 ## 结构
 ```mermaid
 flowchart LR
@@ -16,11 +16,11 @@ flowchart LR
   M --> P
 ```
 ## 安装维护工具
-需要 Python 3.10+、PyYAML。不会替换或重启 Xray、sing-box、cloudflared、Caddy、Sub-Store；这不是空白 VPS 的全量代理安装器。
+需要 Python 3.10+、PyYAML。不会替换或重启 Xray、sing-box、cloudflared、Caddy、Sub-Store；此命令仅更新维护代码；空白 VPS 全量初始化使用下方 `onboard.py install`。
 从 GitHub Release 下载版本包和 SHA256SUMS，核验后运行：
 ```sh
 sha256sum -c SHA256SUMS
-python3 install.py argosbx-fleet-v1.0.4.tar.gz --sha256 <已核对的SHA256>
+python3 install.py argosbx-fleet-v1.1.1.tar.gz --sha256 <已核对的SHA256>
 ```
 安装到 `/opt/argosbx-fleet/v1.0.4`，原子更新 `current` 符号链接。同一版本内容不可覆盖。升级使用相同命令；数据与凭据不在发布包内。
 ## 配置入口

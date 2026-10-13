@@ -24,8 +24,9 @@ def main():
     elif a.command=='protocol-plan':result=remote(config,a.server,'plan',{'protocols':server['protocols'],'certificates':server['certificates']})
     elif a.command=='protocol-apply':
         import tunnels
-        previous=remote(config,a.server,'inspect')['protocols']
-        checked=remote(config,a.server,'plan',{'protocols':server['protocols'],'certificates':server['certificates']})
+        checked=remote(config,a.server,'planned')
+        if checked['protocols']!=server['protocols'] or checked['certificates']!=server['certificates']:raise ValueError('资料在计划后变化，请重新 protocol-plan')
+        previous=checked['previous_protocols']
         if checked['restart_required'] and not a.allow_restart:raise ValueError('新入站需要原生服务重启；未修改服务或 Cloudflare，请在维护窗口使用 --allow-restart')
         from protocols import protocol_type
         old_cf={i:p for i,p in previous.items() if protocol_type(i,p)=='cf'}

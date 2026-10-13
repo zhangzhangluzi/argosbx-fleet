@@ -80,7 +80,7 @@ class RecoveryTests(unittest.TestCase):
 
     def test_native_publication_preflight_blocks_journal_or_stale_export(self):
         s={'id':'jp','protocols':{'anytls':{'enabled':True}},'certificates':{}}
-        healthy={**s,'native_configuration_matches':True,'services_active':True,'source_matches':True,'unfinished_transactions':[]}
+        healthy={**s,'native_configuration_matches':True,'services_active':True,'source_matches':True,'unfinished_transactions':[],'certificate_health':{'cert':{'usable':True}}}
         for change in [{'source_matches':False},{'unfinished_transactions':['apply-journal.json']}]:
             with patch.object(fleetctl,'remote',return_value={**healthy,**change}),self.assertRaises(ValueError):
                 servers.native_preflight({'servers':[s]})
@@ -109,8 +109,8 @@ class ParameterTests(unittest.TestCase):
         config['servers'][0]['protocols']={'anytls':{'enabled':True,'port':2447,'listen':'::','certificate':'cert','sni':'tls.example.com','alpn':[],'padding_scheme':[],'client':{}}}
         config['servers'][0]['certificates']={'cert':{'certificate_file':'/test/cert','key_file':'/test/key'}}
         fleet.validate(config);captured={}
-        def capture(path,content,*args,**kwargs):captured['payload']=json.loads(content)
-        with patch.object(fleet,'read',return_value=config),patch.object(Path,'write_text',capture),patch.object(Path,'chmod'),patch.dict(sys.modules),contextlib.redirect_stdout(io.StringIO()):
+        def capture(path,content,*args,**kwargs):captured['payload']=content
+        with patch.object(fleet,'read',return_value=config),patch('storage.save',side_effect=capture),patch.dict(sys.modules),contextlib.redirect_stdout(io.StringIO()):
             sys.modules.pop('dns_policy',None);runpy.run_path(str(ROOT/'generate.py'))
         sr=next(x['content'] for x in captured['payload']['files'] if x['name']=='shadowrocket-config')
         group=next(x for x in sr.splitlines() if x.startswith('地区-日本 ='))
@@ -170,6 +170,7 @@ class ApplyCrashTests(unittest.TestCase):
             after=copy.deepcopy(state);after['protocols']['anytls']['client']={'fast-open':False}
             save(agent.PLAN,{'state_before':state,'state_after':after,'files':[],'services':[]})
             stack.enter_context(patch.object(agent,'cmd',return_value=''))
+            stack.enter_context(patch.object(agent,'certificate_health',return_value={'cert':{'usable':True}}))
             import grp
             stack.enter_context(patch.object(agent.grp,'getgrnam',return_value=grp.getgrgid(os.getgid())))
             def crash(body,*args):

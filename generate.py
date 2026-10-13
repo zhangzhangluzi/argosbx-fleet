@@ -1,11 +1,13 @@
 """Prepare native Sub-Store source processors and client configuration templates."""
 import json,pathlib,re,yaml,sys
 
-from fleet import read, region_spec
+from fleet import read, region_spec, host_map
+from storage import save
 from protocols import LABELS
 from dns_policy import harden_config, harden_shadowrocket
 root=pathlib.Path(__file__).parent
-inventory=read()
+inventory=globals().get('inventory_override') or read()
+node_hosts=host_map(inventory)
 specs={s['id']:s for s in inventory['servers']}
 countries={s['country']:s['country_name'] for s in specs.values()}
 country_prefixes={label:[s['name'] for s in specs.values() if s['country']==code] for code,label in countries.items()}
@@ -19,7 +21,7 @@ for fmt in ('clash','stash'):
     base=yaml.safe_load((root/'templates'/('base-'+fmt+'.yaml')).read_text())
     base.pop('proxies',None);base.pop('proxy-groups',None)
     base['rules']=[r.replace(',UDP线路', ',日常线路') for r in base['rules']]
-    base=harden_config(base,fmt)
+    base=harden_config(base,fmt,hosts=node_hosts)
     health={'url':'https://www.gstatic.com/generate_204','interval':inventory.get('health',{}).get('interval',900),'tolerance':50,'lazy':False}
     if fmt == 'clash':
         base['unified-delay']=True
@@ -51,7 +53,7 @@ for fmt in ('clash','stash'):
         script = (root/'ech-policy.js').read_text().replace('CF_HOSTS',json.dumps([s['domains']['cf'] for s in specs.values() if s['domains']['cf']])) + '\n' + script.replace('const proxies=source.proxies;', 'const proxies=applyCfEch(source.proxies);')
     files.append({'name':fmt,'displayName':'ArgoSBX · '+fmt,'type':'mihomoConfig','sourceType':'collection','sourceName':'all','process':[{'type':'Script Operator','args':{'mode':'script','content':script}}]})
 # Shadowrocket configuration keeps the accepted DNS, Play and Telegram rules.
-sr=harden_shadowrocket((root/'templates'/'base-shadowrocket.conf').read_text())
+sr=harden_shadowrocket((root/'templates'/'base-shadowrocket.conf').read_text(),hosts=node_hosts)
 sr+='\n[Proxy Group]\n';start=sr.index('[Proxy Group]');end=len(sr)
 groups=['[Proxy Group]','日常线路 = select, '+', '.join('地区-'+label for label in countries.values()),'AI线路 = select, 日常线路, '+', '.join(purpose_groups),'Telegram = select, 日常线路, '+', '.join(purpose_groups)]
 for code,label in countries.items():
@@ -77,5 +79,5 @@ export_processor={'type':'Response Transformer','customName':'FlClash 完整配�
 for item in payload['subscriptions']+payload['collections']:
     item['process'].append(export_processor)
 from fleet import STATE
-p=STATE/'substore-payload.json';p.parent.mkdir(parents=True,exist_ok=True,mode=0o700);p.write_text(json.dumps(payload,ensure_ascii=False));p.chmod(0o600)
+p=STATE/'substore-payload.json';save(p,payload)
 print(json.dumps({'subscriptions':len(subscriptions),'collections':1,'files':len(files),'groups_per_yaml':len(countries)+6,'visible_groups_per_yaml':len(countries)+4}))

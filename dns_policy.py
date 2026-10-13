@@ -10,7 +10,6 @@ from fleet import host_map
 BOOTSTRAP = ['https://223.5.5.5/dns-query', 'https://223.6.6.6/dns-query']
 REMOTE = ['https://1.1.1.1/dns-query', 'https://1.0.0.1/dns-query']
 # Only stable, self-owned origin addresses are pinned; CDN ingress remains dynamic.
-NODE_HOSTS = host_map()
 FEISHU = ['feishu.cn','feishucdn.com']
 LOCAL_DOH = 'https://223.6.6.6/dns-query'
 DNS_DOMAINS = ['dns.alidns.com', 'doh.pub', 'dot.pub', 'dns.google',
@@ -34,9 +33,9 @@ def guarded_rules(original):
     return guards + [r for r in original if ','.join(r.split(',')[:2]) not in managed]
 
 
-def harden_config(original, client):
+def harden_config(original, client, hosts=None):
     config = copy.deepcopy(original)
-    config.setdefault('hosts', {}).update(NODE_HOSTS)
+    config.setdefault('hosts', {}).update(host_map() if hosts is None else hosts)
     config['rules'] = guarded_rules(config['rules'])
     dns = config['dns']
     dns['default-nameserver'] = list(BOOTSTRAP)
@@ -63,7 +62,8 @@ def harden_config(original, client):
     return config
 
 
-def harden_shadowrocket(original):
+def harden_shadowrocket(original, hosts=None):
+    node_hosts=host_map() if hosts is None else hosts
     remote = ', '.join(u + '#proxy' for u in REMOTE)
     replacements = {'dns-server': LOCAL_DOH, 'fallback-dns-server': LOCAL_DOH,
                     'proxy-dns-server': ', '.join(BOOTSTRAP), 'dns-direct-system': 'false',
@@ -80,7 +80,7 @@ def harden_shadowrocket(original):
     rule_end = next_section if next_section >= 0 else len(result)
     rules = [s for s in result[rule_start:rule_end].splitlines() if s.strip()]
     result = result[:rule_start] + '\n' + '\n'.join(guarded_rules(rules)) + '\n' + result[rule_end:]
-    host_section = '[Host]\n' + '\n'.join(k + ' = ' + v for k, v in NODE_HOSTS.items()) + '\n'
+    host_section = '[Host]\n' + '\n'.join(k + ' = ' + v for k, v in node_hosts.items()) + '\n'
     if '[Host]' not in result:
         result += '\n' + host_section
     else:
@@ -88,6 +88,6 @@ def harden_shadowrocket(original):
         end = result.find('\n[', start)
         end = end if end >= 0 else len(result)
         lines = [s for s in result[start:end].splitlines() if s.strip()
-                 and s.split('=', 1)[0].strip() not in NODE_HOSTS]
+                 and s.split('=', 1)[0].strip() not in node_hosts]
         result = result[:start] + '\n' + ''.join(s + '\n' for s in lines) + host_section[len('[Host]\n'):] + result[end:]
     return result

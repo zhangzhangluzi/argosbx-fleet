@@ -20,6 +20,7 @@ PLAN = STATE/'server-plan.json'
 
 
 from storage import save, lock
+from lease import ensure_owned
 import publication
 JOURNAL=STATE/'publication-journal.json'
 STAGING=STATE/'staging-journal.json'
@@ -29,19 +30,21 @@ def digest(data):
     return hashlib.sha256(json.dumps(data, sort_keys=True).encode()).hexdigest()
 
 
-def generate():
+def generate(config=None):
     sys.path.insert(0, str(WORK))
     # This established generator owns client-specific conversions, rules and ECH.
     with contextlib.redirect_stdout(io.StringIO()):
-        runpy.run_path(str(WORK/'generate.py'))
+        runpy.run_path(str(WORK/'generate.py'),init_globals={'inventory_override':config})
     return json.loads((STATE/'substore-payload.json').read_text())
 
 
 def request(config, path, value=None, method=None, raw=False):
+    ensure_owned()
     base = config['subscription']['backend_url'].rstrip('/')
     req = urllib.request.Request(base+path, data=None if value is None else json.dumps(value).encode(),
                                  method=method, headers={'Content-Type':'application/json','User-Agent':'FlClash/0.8.99'})
     with urllib.request.urlopen(req, timeout=45) as r: body = r.read().decode()
+    ensure_owned()
     if raw: return body
     result = json.loads(body)
     if result.get('status') != 'success': raise ValueError('Sub-Store API 未成功')
@@ -69,12 +72,15 @@ def native_preflight(config):
             raise ValueError(server['id']+'：服务未就绪或原生配置存在漂移')
         if live.get('unfinished_transactions') or live.get('source_matches') is not True:
             raise ValueError(server['id']+'：事务未恢复或订阅源与服务端不一致')
+        if live.get('certificate_health') is None or any(not v['usable'] for v in live['certificate_health'].values()):
+            raise ValueError(server['id']+'：证书尚未验收或已失效')
     with ThreadPoolExecutor(max_workers=min(4,max(1,len(configured)))) as pool:list(pool.map(check,configured))
 
 
 def prepare(config):
+    if JOURNAL.exists() or STAGING.exists():raise ValueError('有未完成发布事务，请先执行 recover')
     native_preflight(config)
-    payload=generate()
+    payload=generate(config)
     items=[]
     for key,kind in [('subscriptions','sub'),('collections','collection'),('files','file')]:
         for candidate in payload[key]:
@@ -130,12 +136,7 @@ def stage(config, payload):
         if set(sr_names)!=set(expected):raise ValueError('Shadowrocket 分组与实际节点不一致')
         rendered['shadowrocket-config']=digest(sr)
     finally:
-        failures=[]
-        for kind,name in reversed(created):
-            try:request(config,'/api/'+kind+'/'+name,method='DELETE')
-            except Exception:failures.append(kind+'/'+name)
-        if failures:raise RuntimeError('临时 Sub-Store 对象清理失败：'+', '.join(failures))
-        STAGING.unlink()
+        publication.recover(STAGING,config,get,request,digest)
     return rendered
 
 
@@ -201,7 +202,7 @@ def main():
         from lease import coordinator
         with (coordinator(config) if args.command in ('plan','publish','recover') else contextlib.nullcontext()):
             if args.command=='check':result={'校验通过':True,'服务器':[s['id'] for s in config['servers']]}
-            elif args.command=='generate':result={'生成成功':True,'文件':str(STATE/'substore-payload.json'),'订阅源数量':len(generate()['subscriptions'])}
+            elif args.command=='generate':result={'生成成功':True,'文件':str(STATE/'substore-payload.json'),'订阅源数量':len(generate(config)['subscriptions'])}
             elif args.command=='plan':result=summarize(prepare(config))
             elif args.command=='publish':result=publish(config)
             else:result=[publication.recover(p,config,get,request,digest) for p in [JOURNAL,STAGING]]

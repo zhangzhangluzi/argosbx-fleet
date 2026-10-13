@@ -26,6 +26,24 @@ def load():return json.loads(STATE.read_text())
 def configs(state):return {p:json.loads(Path(p).read_text()) for p in {b['path'] for b in state['bindings'].values()}}
 def cmd(args):return subprocess.run(args,capture_output=True,text=True,check=True,timeout=45).stdout
 
+def certificate_health(state):
+    import ssl,time
+    result={}
+    for ref in sorted({p['certificate'] for p in state['protocols'].values() if p['enabled'] and p.get('certificate')}):
+        pair=state['certificates'][ref]
+        hosts=sorted({p['sni'] for p in state['protocols'].values() if p['enabled'] and p.get('certificate')==ref})
+        try:
+            dates=dict(line.split('=',1) for line in cmd(['openssl','x509','-in',pair['certificate_file'],'-noout','-dates']).splitlines())
+            now=time.time();days=int((ssl.cert_time_to_seconds(dates['notAfter'])-now)//86400)
+            started=ssl.cert_time_to_seconds(dates['notBefore'])<=now
+            matches=all('does match certificate' in cmd(['openssl','x509','-in',pair['certificate_file'],'-noout','-checkhost',host]) for host in hosts)
+            public=cmd(['openssl','x509','-in',pair['certificate_file'],'-pubkey','-noout']).strip()
+            key=cmd(['openssl','pkey','-in',pair['key_file'],'-pubout']).strip()
+            result[ref]={'usable':started and days>=1 and matches and public==key,'days_remaining':days,'renewal_due':days<14,'identities_match':matches,'key_matches':public==key,'validity_started':started}
+        except (OSError,ValueError,KeyError,IndexError,subprocess.SubprocessError):
+            result[ref]={'usable':False,'error':'证书或私钥不可读取、解析或校验'}
+    return result
+
 def validate_native(state,values):
     for path,c in values.items():
         core=next(b['core'] for b in state['bindings'].values() if b['path']==path)
@@ -41,14 +59,8 @@ def plan(desired):
     updated=copy.deepcopy(state)
     if 'certificates' in desired:updated['certificates']=desired['certificates']
     after=render(before,updated,desired['protocols']);validate_native(state,after)
-    # Cert identity must already be ready before switching a client SNI.
-    for ident,p in desired['protocols'].items():
-        if p.get('enabled') and p.get('certificate'):
-            pair=updated['certificates'][p['certificate']]
-            check=cmd(['openssl','x509','-in',pair['certificate_file'],'-noout','-checkhost',p['sni']])
-            if 'does match certificate' not in check:raise ValueError('证书不包含新 SNI')
-            cmd(['openssl','x509','-in',pair['certificate_file'],'-noout','-checkend','86400'])
     updated['protocols']=desired['protocols']
+    if any(not v['usable'] for v in certificate_health(updated).values()):raise ValueError('证书过期、SNI 不匹配或私钥不匹配，未创建计划')
     files=[{'path':p,'before':Path(p).read_text(),'after':json.dumps(c,ensure_ascii=False,indent=2)+'\n'} for p,c in after.items() if c!=before[p]]
     services=sorted({b['service'] for b in state['bindings'].values() if b['path'] in {f['path'] for f in files}})
     save(PLAN,{'state_before':state,'state_after':updated,'files':files,'services':services})
@@ -85,6 +97,7 @@ def apply(allow_restart=False):
     p=json.loads(PLAN.read_text());state=load()
     if state!=p['state_before']:raise ValueError('计划已过期')
     if p['services'] and not allow_restart:raise ValueError('本次需重启 '+','.join(p['services'])+'；保护现有连接，未修改任何配置')
+    if any(not v['usable'] for v in certificate_health(p['state_after']).values()):raise ValueError('证书在 plan 后已失效；未修改配置')
     for path,h in state['native_sha256'].items():
         if sha(Path(path).read_text())!=h:raise ValueError('原生配置在 plan 后发生变化')
     for f in p['files']:
@@ -200,6 +213,7 @@ def main():
             r['services_active']=all(subprocess.run(['systemctl','is-active','--quiet',u]).returncode==0 for u in {b['service'] for ident,b in s['bindings'].items() if s['protocols'][ident]['enabled']})
             r['unfinished_transactions']=[p.name for p in HOME.glob('*journal.json')]
             r['source_matches']=TARGET.exists() and yaml.safe_load(TARGET.read_text())==export(configs(s),s) if r['native_configuration_matches'] else False
+            r['certificate_health']=certificate_health(s)
         elif a.command=='plan':r=plan(json.load(sys.stdin))
         elif a.command=='apply':r=apply(a.allow_restart)
         elif a.command=='recover':r=restore(a.allow_restart)

@@ -59,8 +59,8 @@ class PublicationTests(unittest.TestCase):
         self.assertTrue(self.path.exists());self.assertFalse(writes)
     def test_staging_unknown_create_cleaned_after_crash(self):
         j=publication.begin(self.path,self.config,self.digest);j['temporary']=[['sub','server-check-random']];save(self.path,j);writes=[]
-        publication.recover(self.path,self.config,None,lambda *a,**k:writes.append((a,k)),self.digest)
-        self.assertEqual(writes[0][1]['method'],'DELETE')
+        publication.recover(self.path,self.config,None,lambda *a,**k: (writes.append((a,k)) or ([{'name':'server-check-random'}] if len(writes)==1 else [])),self.digest)
+        self.assertEqual(writes[1][1]['method'],'DELETE')
     def test_second_transaction_refused(self):
         self.journal()
         with self.assertRaises(ValueError):publication.begin(self.path,self.config,self.digest)
@@ -140,7 +140,7 @@ class RoutingTests(unittest.TestCase):
         with patch.object(fleet,'host_map',return_value={}):
             sys.modules.pop('dns_policy',None);dns=importlib.import_module('dns_policy')
         for fmt in ('clash','stash'):
-            base=yaml.safe_load((Path(__file__).resolve().parents[1]/'templates'/('base-'+fmt+'.yaml')).read_text());v=dns.harden_config(base,fmt)
+            base=yaml.safe_load((Path(__file__).resolve().parents[1]/'templates'/('base-'+fmt+'.yaml')).read_text());v=dns.harden_config(base,fmt,hosts={})
             policy=v['dns']['nameserver-policy']
             key='rule-set:国内域名' if fmt=='clash' else 'geosite:cn'
             self.assertTrue(policy[key][0].startswith('https://223.6.6.6/'))
@@ -177,7 +177,7 @@ class ShadowrocketRoutingTests(unittest.TestCase):
         with patch.object(fleet,'host_map',return_value={}):
             sys.modules.pop('dns_policy',None);dns=importlib.import_module('dns_policy')
         original=(Path(__file__).resolve().parents[1]/'templates/base-shadowrocket.conf').read_text()
-        result=dns.harden_shadowrocket(original)
+        result=dns.harden_shadowrocket(original,hosts={})
         self.assertIn('dns-server = https://223.6.6.6/dns-query\n',result)
         self.assertNotIn('fallback-dns-server = system',result)
         self.assertIn('DOMAIN-SET,https://raw.githubusercontent.com/blackmatrix7/',result)

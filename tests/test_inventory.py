@@ -91,9 +91,9 @@ class InventoryTests(unittest.TestCase):
         other['subscription']['name']='argo-gb2'
         self.config['servers'].append(other);self.config['purpose_order']=['GB']
         captured={}
-        def capture(path,content,*a,**kw):captured['payload']=json.loads(content)
+        def capture(path,content,*a,**kw):captured['payload']=content
         work=ROOT
-        with patch.object(fleet,'read',return_value=self.config),patch.object(Path,'write_text',capture),patch.object(Path,'chmod'),contextlib.redirect_stdout(io.StringIO()),patch.dict(sys.modules):
+        with patch.object(fleet,'read',return_value=self.config),patch('storage.save',side_effect=capture),contextlib.redirect_stdout(io.StringIO()),patch.dict(sys.modules):
             sys.modules.pop('dns_policy',None);sys.path.insert(0,str(work))
             try:runpy.run_path(str(work/'generate.py'))
             finally:sys.path.remove(str(work))

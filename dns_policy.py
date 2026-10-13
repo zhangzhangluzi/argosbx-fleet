@@ -23,17 +23,34 @@ DOMESTIC_BUSINESS_HOSTS = [
     'lf3-ad-platform.byteadverts.com',
 ]
 LOCAL_DOH = 'https://223.6.6.6/dns-query'
+# Remote-control signaling, relays and app-owned P2P must keep the local exit.
+REMOTE_CONTROL_DOMAINS = [
+    'nrd.nie.163.com', 'uuyc.163.com', 'uuyc.webapp.163.com',
+    'nrd-ugc.fp.ps.netease.com', 'todesk.com', 'oray.com', 'oray.net',
+    'orayimg.com',
+]
+REMOTE_CONTROL_PROCESS = r'(?i)^(uuremote|uuyc|todesk|sunlogin|oray-sunlogin).*$'
+REMOTE_CONTROL_RULE = 'PROCESS-NAME-REGEX,' + REMOTE_CONTROL_PROCESS + ',DIRECT'
 DNS_DOMAINS = ['dns.alidns.com', 'doh.pub', 'dot.pub', 'dns.google',
                'cloudflare-dns.com', 'one.one.one.one', 'dns.quad9.net']
 DNS_IPS = ['1.1.1.1', '1.0.0.1', '8.8.8.8', '8.8.4.4', '223.5.5.5',
-           '223.6.6.6', '119.29.29.29', '9.9.9.9', '149.112.112.112']
+           '119.29.29.29', '9.9.9.9', '149.112.112.112']
 DNS_IPV6 = ['2606:4700:4700::1111', '2606:4700:4700::1001',
             '2001:4860:4860::8888', '2001:4860:4860::8844',
             '2400:3200::1', '2400:3200:baba::1']
+TAILSCALE_CIDRS = ['100.64.0.0/10', 'fd7a:115c:a1e0::/48']
+MAGIC_DNS_RULE = 'IP-CIDR,100.100.100.100/32,DIRECT,no-resolve'
 
 
-def guarded_rules(original):
+def guarded_rules(original, tailscale=None):
     guards = ['DST-PORT,53,REJECT', 'DST-PORT,853,日常线路']
+    if tailscale:
+        # Only the local MagicDNS stub bypasses the plaintext DNS guard.
+        guards.insert(0, MAGIC_DNS_RULE)
+        guards += ['DOMAIN-SUFFIX,' + tailscale['magic_dns_suffix'] + ',DIRECT',
+                   'IP-CIDR,' + TAILSCALE_CIDRS[0] + ',DIRECT,no-resolve',
+                   'IP-CIDR6,' + TAILSCALE_CIDRS[1] + ',DIRECT,no-resolve']
+    guards += ['DOMAIN-SUFFIX,'+d+',DIRECT' for d in REMOTE_CONTROL_DOMAINS]
     guards += ['DOMAIN-SUFFIX,'+d+',DIRECT' for d in FEISHU]
     guards += ['DOMAIN,'+d+',日常线路' for d in BUSINESS_CONSOLES]
     guards += ['DOMAIN,'+d+',DIRECT' for d in DOMESTIC_BUSINESS_HOSTS]
@@ -46,15 +63,25 @@ def guarded_rules(original):
     return guards + [r for r in original if ','.join(r.split(',')[:2]) not in managed]
 
 
-def harden_config(original, client, hosts=None):
+def harden_config(original, client, hosts=None, tailscale=None):
     config = copy.deepcopy(original)
     config.setdefault('hosts', {}).update(host_map() if hosts is None else hosts)
-    config['rules'] = guarded_rules(config['rules'])
+    # Resolve only the final domestic IP fallback. Earlier IP rules intentionally
+    # avoid DNS so explicit app/domain policies remain first and DNS cannot loop.
+    config['rules'] = guarded_rules([
+        'RULE-SET,国内IP,DIRECT' if r == 'RULE-SET,国内IP,DIRECT,no-resolve' else r
+        for r in config['rules']], tailscale)
     dns = config['dns']
     dns['default-nameserver'] = list(BOOTSTRAP)
     dns.pop('fallback', None)
     dns.pop('fallback-filter', None)
     if client == 'clash':
+        # Keep the plaintext DNS guard first; process rules cover pure IP and
+        # changing relay addresses before generic UDP and foreign-IP fallbacks.
+        config['rules'] = [r for r in config['rules'] if r != REMOTE_CONTROL_RULE]
+        config['rules'].insert(config['rules'].index('DST-PORT,53,REJECT') + 1, REMOTE_CONTROL_RULE)
+        if config.get('find-process-mode') not in ('strict', 'always'):
+            config['find-process-mode'] = 'strict'
         dns['nameserver'] = [u + '#日常线路' for u in REMOTE]
         dns['proxy-server-nameserver'] = [u + '#DIRECT' for u in BOOTSTRAP]
         from ech import PUBLIC_NAME, DNS
@@ -76,6 +103,17 @@ def harden_config(original, client, hosts=None):
         dns['follow-rule'] = True
     dns['nameserver-policy'].update({d: [LOCAL_DOH + ('#DIRECT' if client == 'clash' else '')]
                                     for d in DOMESTIC_BUSINESS_HOSTS})
+    dns['nameserver-policy'].update({'+.'+d: [LOCAL_DOH + ('#DIRECT' if client == 'clash' else '')]
+                                    for d in REMOTE_CONTROL_DOMAINS})
+    if client == 'clash':
+        dns['fake-ip-filter'] = list(dict.fromkeys(dns.get('fake-ip-filter', []) +
+                                                 ['+.'+d for d in REMOTE_CONTROL_DOMAINS]))
+    if tailscale:
+        suffix = '+.' + tailscale['magic_dns_suffix']
+        dns['nameserver-policy'][suffix] = ['100.100.100.100' + ('#DIRECT' if client == 'clash' else '')]
+        dns['fake-ip-filter'] = list(dict.fromkeys(dns.get('fake-ip-filter', []) + [suffix]))
+        if client == 'clash':
+            tun['route-exclude-address'] = list(dict.fromkeys(tun.get('route-exclude-address', []) + TAILSCALE_CIDRS))
     return config
 
 
@@ -89,9 +127,9 @@ def harden_shadowrocket(original, hosts=None):
     for key, value in replacements.items():
         result, count = re.subn(r'^' + re.escape(key) + r'\s*=.*$', key + ' = ' + value, result, flags=re.M)
         assert count == 1, 'Unexpected Shadowrocket setting: ' + key
-    result = re.sub(r'^GEOIP,CN,DIRECT$', 'GEOIP,CN,DIRECT,no-resolve', result, flags=re.M)
+    result = re.sub(r'^GEOIP,CN,DIRECT,no-resolve$', 'GEOIP,CN,DIRECT', result, flags=re.M)
     direct_set='DOMAIN-SET,https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Shadowrocket/ChinaMax/ChinaMax_Domain.list,DIRECT'
-    if direct_set not in result:result=result.replace('GEOIP,CN,DIRECT,no-resolve',direct_set+'\nGEOIP,CN,DIRECT,no-resolve')
+    if direct_set not in result:result=result.replace('GEOIP,CN,DIRECT',direct_set+'\nGEOIP,CN,DIRECT')
     rule_start = result.index('[Rule]') + len('[Rule]')
     next_section = result.find('\n[', rule_start)
     rule_end = next_section if next_section >= 0 else len(result)

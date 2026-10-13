@@ -1,7 +1,6 @@
-v1.1.4 自动覆盖全部可用 ECH 入口。
-- CF 固定使用 cloudflare-ech.com 与阿里 DoH 默认值，自动解析公钥。
-- AnyTLS、Hysteria2、Salamander 自动生成并保留独立原生 ECH 密钥，订阅只导出公开配置。
-- 修复 Mihomo ECH DNS 引导策略及 Sub-Store VMess URI 丢失 ECH，保留原订阅路径、节点身份、分组和路由。
-- REALITY、ShadowTLS 维持其原生机制，不输出被内核忽略的普通 ECH 参数。
-- 支持应用后保留恢复日志，握手验收通过再提交；新增独立 TLS/QUIC ECHAccepted 验收工具与密钥一致性回归。
-首次启用 ECH 会重启受影响的 Xray/sing-box 服务；维护代码安装本身不重启。
+v1.1.5 国内 IP 兜底与现有 Tailscale 共存。
+- 只移除末尾国内 IP / GEOIP 兜底的 no-resolve，保留应用、广告例外和其他 IP 规则优先级。
+- 私有 inventory 可填写实际 MagicDNS 域名；Clash / Stash 同步专用解析、Fake-IP 排除与 Tailnet 直连，Mihomo 同步 TUN 排除。
+- 仅本机 MagicDNS 例外先于明文 DNS 拦截，不放行整个 ts.net，不改变公网 DNS 策略。
+- 收录已在线使用的 UU 远程 / ToDesk / 向日葵直连规则及回归测试。
+- 原统一和国家订阅地址、节点身份、协议参数不变；维护工具升级不重启代理进程。

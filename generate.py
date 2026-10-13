@@ -21,7 +21,7 @@ for fmt in ('clash','stash'):
     base=yaml.safe_load((root/'templates'/('base-'+fmt+'.yaml')).read_text())
     base.pop('proxies',None);base.pop('proxy-groups',None)
     base['rules']=[r.replace(',UDP线路', ',日常线路') for r in base['rules']]
-    base=harden_config(base,fmt,hosts=node_hosts)
+    base=harden_config(base,fmt,hosts=node_hosts,tailscale=inventory.get('tailscale'))
     health={'url':'https://www.gstatic.com/generate_204','interval':inventory.get('health',{}).get('interval',900),'tolerance':50,'lazy':False}
     if fmt == 'clash':
         base['unified-delay']=True

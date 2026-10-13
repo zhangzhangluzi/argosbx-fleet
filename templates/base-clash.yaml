@@ -87,7 +87,7 @@ rules:
 - DOMAIN-SUFFIX,126.com,DIRECT
 - DOMAIN-SUFFIX,xiaohongshu.com,DIRECT
 - RULE-SET,国内域名,DIRECT
-- RULE-SET,国内IP,DIRECT,no-resolve
+- RULE-SET,国内IP,DIRECT
 - NETWORK,UDP,UDP线路
 - MATCH,日常线路
 unified-delay: false

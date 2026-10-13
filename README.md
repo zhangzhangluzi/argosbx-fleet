@@ -20,9 +20,9 @@ flowchart LR
 从 GitHub Release 下载版本包和 SHA256SUMS，核验后运行：
 ```sh
 sha256sum -c SHA256SUMS
-python3 install.py argosbx-fleet-v1.1.4.tar.gz --sha256 <已核对的SHA256>
+python3 install.py argosbx-fleet-v1.1.5.tar.gz --sha256 <已核对的SHA256>
 ```
-安装到 `/opt/argosbx-fleet/v1.1.4`，原子更新 `current` 符号链接。同一版本内容不可覆盖。升级使用相同命令；数据与凭据不在发布包内。
+安装到 `/opt/argosbx-fleet/v1.1.5`，原子更新 `current` 符号链接。同一版本内容不可覆盖。升级使用相同命令；数据与凭据不在发布包内。
 ## 配置入口
 复制 `templates/servers.example.json` 到私有路径，设置权限 0600；通过 `ARGOSBX_SERVERS_FILE` 指定。`ARGOSBX_WORKSPACE` 用于解析相对 SSH 路径；`ARGOSBX_STATE` 为计划和恢复日志目录。设置 `coordinator` 为运行 Sub-Store 的服务器 ID，使用该机原生 `flock` 排除跨工作站同时发布。每次 Sub-Store 请求前后检查锁连接；检测到连接断开就停止写入并保留恢复日志。它不提供服务端数据库 fencing，已在途的请求仍须回读确认。
 初次接管现有安装：向各 VPS `agent.py adopt` 标准输入传递 `{server_id, services}`；services 是原生配置完整路径到 systemd unit 的映射。程序读取实际端口、TLS 参数、凭据和源节点，校验两个内核并确认接管前后正式节点等价，再保存 `/etc/argosbx-fleet/server.json`。同类协议存在多个入站时拒绝自动猜测；需要先明确映射。
@@ -52,6 +52,7 @@ python3 fleetctl.py domain-commit --server jp
 ## 分流与测速
 继续使用 [MetaCubeX/meta-rules-dat](https://github.com/MetaCubeX/meta-rules-dat) 国内域名/IP 与广告集合，日更且使用客户端缓存。优先保留 Google Play、AI、Telegram 例外；飞书业务/静态资源显式直连。Clash 的国内 DNS 跟随相同国内规则集，Stash 使用原生 geosite:cn 策略；国内走 AliDNS HTTPS，国外走代理上的 Cloudflare HTTPS。禁用明文 DNS 回退，节点解析保留独立启动路径。Shadowrocket 使用对应 ChinaMax DOMAIN-SET；其 DNS 覆写用于直连规则，改用国内 DoH，代理域名仍交给节点解析，保留独立原生格式。参见 [Stash DNS](https://stash.wiki/features/dns-server)、[Mihomo DNS](https://wiki.metacubex.one/config/dns/) 及 [Shadowrocket 配置说明](https://github.com/LOWERTOP/Shadowrocket/wiki#修改dns)。
 `health.interval` 统一支持 900 或 1800 秒，默认 900。日常、AI、Telegram、国家自动组、去广告开关及现有节点名称保留。Clash/FlClash 导出始终是带规则分组的完整配置。
+UU 远程、向日葵与 ToDesk 的服务域名及其 DNS 显式直连。Clash/FlClash 将这些域名从 Fake-IP 排除，并按进程名前缀匹配主程序、服务和辅助进程，覆盖纯 IP 的 TCP/UDP 中继与 P2P；需要运行在能识别本机进程的客户端上，不能据此保证其他设备经路由器转发的流量。明文 DNS 防护仍优先；Stash/Shadowrocket 仅使用各自兼容的域名规则，不下发 Mihomo 专用进程正则。
 ## 验证
 ```sh
 python3 -B -m unittest discover -s tests -v
@@ -105,3 +106,9 @@ AnyTLS、Hysteria2、Hysteria2 Salamander 的 TLS 终止在 VPS，本机原生 X
 当前 Mihomo 的 REALITY 分支与 ShadowTLS 分支不调用普通 ECH 握手，不能通过增加 `ech-opts` 获得 ECH；维持原生机制并验证连接。Salamander 已混淆整个 QUIC 包，ECH 仍在其中的 TLS 握手启用。Stash 导出保留字段，但缺少官方 ECH 能力声明与本机运行端时，不把它视为已验证 ECH 客户端。
 维护工具安装不重启代理；首次 ECH 启用要通过原生协议计划和允许重启的应用步骤。逐台验收可使用 `agent.py apply --allow-restart --defer-commit` 保留现有恢复日志，外部握手和代理业务通过后 `agent.py commit`；失败用 `agent.py recover --allow-restart`。未提交事务阻止后续导出/发布。
 `tests/echprobe` 使用 Go 原生 TLS、与 sing-box 对应的 QUIC/Salamander 库，从独立服务器检查入口 `ECHAccepted` 和证书验证结果；应同时核对真实客户端 HTTPS/出口/UDP，而不是把代理内部访问网页的 TLS 状态当作入口证据。
+
+## 国内 IP 兜底与现有 Tailscale 共存
+国内域名规则未命中时，末尾 `RULE-SET,国内IP,DIRECT` 允许解析目标 IP 再判断；Shadowrocket 对应 `GEOIP,CN,DIRECT`。仅改变这一层兜底，Google Play、AI、Telegram 与广告例外的优先级不变，其余 IP 规则继续保留 `no-resolve`，避免过早解析或 DNS 循环。
+已安装并登录 Tailscale 的客户端，可在私有 `servers.json` 增加 `"tailscale": {"magic_dns_suffix": "tail-example.ts.net"}`；填入 `tailscale status --json` 返回的 `CurrentTailnet.MagicDNSSuffix`，不用时省略此项。此配置只影响客户端订阅，不会在 VPS 安装 Tailscale 或更改 ACL。
+Clash/FlClash、Stash 将这个具体 Tailnet 域名交给本机 MagicDNS `100.100.100.100`，从 Fake-IP 排除，并将 `100.64.0.0/10` 与 `fd7a:115c:a1e0::/48` 直连。仅 MagicDNS 本机地址先于明文 DNS 拦截；其他公网或 Tailnet DNS 的 53 端口仍拦截。Mihomo 同时排除这两个 TUN 网段，Stash 不下发不兼容的 Mihomo TUN 字段。不会把整个 `ts.net` 或 Tailscale 公网网站直连，也不会把私有域名送给公共 DNS。
+这些规则依赖设备实际可访问自己的 Tailnet；不替代 Tailscale 登录，也不能让 iOS 上两个互斥的 VPN 同时运行。未连接 Tailnet 时只影响该私有域名，不设置公共 DNS 回退。参见 [Mihomo no-resolve](https://wiki.metacubex.one/config/rules/#no-resolve)、[Tailscale MagicDNS](https://tailscale.com/docs/features/magicdns) 和 [Stash DNS 策略](https://stash.wiki/features/dns-server)。

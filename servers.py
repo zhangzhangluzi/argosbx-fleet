@@ -142,7 +142,8 @@ def stage(config, payload):
             value=yaml.safe_load(request(config,'/download/collection/'+col['name']+'?target=ClashMeta',raw=True))
             nodes=value.get('proxies',[])
             if not nodes or len({n['name'] for n in nodes})!=len(nodes):raise ValueError('国家订阅为空或节点重复')
-            rendered[country['name']]=digest(nodes)
+            uri=request(config,'/download/collection/'+col['name']+'?target=URI',raw=True)
+            rendered[country['name']]=digest(uri)
     finally:
         publication.recover(STAGING,config,get,request,digest)
     return rendered
@@ -188,8 +189,8 @@ def publish(config):
             raise ValueError('Shadowrocket 策略与已校验计划不符')
         for name,wanted in plan['rendered_sha256'].items():
             if not name.startswith('shadowrocket-') or name=='shadowrocket-config':continue
-            value=yaml.safe_load(request(config,'/download/collection/'+name+'?target=ClashMeta',raw=True))
-            if digest(value.get('proxies'))!=wanted:raise ValueError('国家订阅与已校验计划不符：'+name)
+            value=request(config,'/download/collection/'+name+'?target=URI',raw=True)
+            if digest(value)!=wanted:raise ValueError('国家订阅与已校验计划不符：'+name)
         public=config['subscription']['public_url']
         req=urllib.request.Request(public,headers={'User-Agent':'FlClash/0.8.99'})
         with urllib.request.urlopen(req,timeout=45) as r:value=yaml.safe_load(r.read())

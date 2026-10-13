@@ -85,6 +85,8 @@ def validate(data):
     if set(data['purpose_order']) != set(regions): raise ValueError('purpose_order 必须包含所有国家且只包含已有国家')
     interval=data.get('health',{}).get('interval',900)
     if type(interval) is not int or interval not in (900,1800): raise ValueError('health.interval 只支持 900 或 1800 秒')
+    tolerance=data.get('health',{}).get('tolerance',100)
+    if type(tolerance) is not int or not 0<=tolerance<=300:raise ValueError('health.tolerance 需为 0 到 300 毫秒')
     tailnet = data.get('tailscale')
     if tailnet is not None:
         if not isinstance(tailnet, dict) or set(tailnet) != {'magic_dns_suffix'}:

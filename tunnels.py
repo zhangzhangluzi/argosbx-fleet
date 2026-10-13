@@ -14,12 +14,13 @@ def routes(server):
     validate_settings(server['protocols'])
     rows=[];seen=set()
     for ident,p in server['protocols'].items():
-        if protocol_type(ident,p)!='cf' or not p['enabled']:continue
-        path='/'+p['ws_path'].lstrip('/')
+        kind=protocol_type(ident,p)
+        if kind not in ('cf','xhttp') or not p['enabled']:continue
+        path='/'+p['ws_path' if kind=='cf' else 'path'].lstrip('/')
         key=(p['sni'],path)
         if key in seen:raise ValueError('CF 域名和 WS 路径重复')
         seen.add(key)
-        rows.append({'hostname':p['sni'],'path':'^'+re.escape(path)+'$','service':cf_origin(p)})
+        rows.append({'hostname':p['sni'],'path':'^'+re.escape(path)+('(?:/.*)?$' if kind=='xhttp' else '$'),'service':cf_origin(p)})
     return rows+[{'service':'http_status:404'}]
 
 def provision(cf,server,zone,journal):
@@ -31,7 +32,7 @@ def provision(cf,server,zone,journal):
         z=discover(cf,zone)
         # Preflight names before allocating a remote resource.
         hosts={v for v in server['domains'].values() if v}|{server['onboarding']['certificate_host']}
-        hosts|={p['sni'] for i,p in server['protocols'].items() if protocol_type(i,p)=='cf' and p['enabled']}
+        hosts|={p['sni'] for i,p in server['protocols'].items() if protocol_type(i,p) in ('cf','xhttp') and p['enabled']}
         routes(server)
         for host in hosts:
             if not host.endswith('.'+zone):raise ValueError('新机必须使用所选域名的子域名')
@@ -59,7 +60,7 @@ def provision(cf,server,zone,journal):
             names={**server['domains'],'certificate':server['onboarding']['certificate_host']}
             plan=build(cf,zone,server,{k:v for k,v in names.items() if k!='cf'},j['tunnel_id'])
             # DNS-only CNAME: tunnel routes have already been read back above.
-            for host in sorted({p['sni'] for i,p in server['protocols'].items() if protocol_type(i,p)=='cf' and p['enabled']}):
+            for host in sorted({p['sni'] for i,p in server['protocols'].items() if protocol_type(i,p) in ('cf','xhttp') and p['enabled']}):
                 plan['records'].append({'name':host,'type':'CNAME','content':j['tunnel_id']+'.cfargotunnel.com','proxied':True,'ttl':1})
             stage(cf,plan,dns_journal)
         j['dns_ready']=True;save(journal,j)
@@ -80,7 +81,7 @@ def remove_owned(cf,journal):
 
 def change_plan(cf,server,previous):
     """Synchronize this server's registered WS routes, preserving unrelated ingress."""
-    def selected(settings):return {i:p for i,p in settings.items() if protocol_type(i,p)=='cf' and p['enabled']}
+    def selected(settings):return {i:p for i,p in settings.items() if protocol_type(i,p) in ('cf','xhttp') and p['enabled']}
     old,new=selected(previous),selected(server['protocols'])
     if old==new:return None
     hosts={p['sni'] for p in old.values()}|{p['sni'] for p in new.values()}

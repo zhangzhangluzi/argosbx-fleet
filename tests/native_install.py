@@ -92,7 +92,6 @@ for n in nodes:
  result=probe.check_case({'name':ident,'node':n,'expected_ips':['127.0.0.1']},https_check=checked(probe_https),udp_check=checked(probe_udp))
  assert all(result[k] for k in ('https_ok','exit_ok','udp_ok')),result
  print('PASS onboarding HTTPS/UDP probe',ident,flush=True)
-echo.close()
 # Create/edit/delete a second same-type listener through installed agent interfaces.
 desired=copy.deepcopy(server['protocols']);desired['anytls_second']={**desired['anytls'],'type':'anytls','port':25447}
 assert agent.plan({'protocols':desired})['added']==['anytls_second']
@@ -101,3 +100,20 @@ assert any(p['port']==25447 for p in export(agent.configs(agent.load()),agent.lo
 agent.plan({'protocols':server['protocols']});agent.apply(True)
 assert before=={p:Path(p).read_bytes() for p in before}
 print('PASS blank install, resume, native clients, second inbound add/remove, original credentials/config restored',flush=True)
+
+# Additional XHTTP service must preserve every existing process and configuration.
+import xhttp
+settings={'enabled':True,'listen':'127.0.0.1','port':18084,'sni':'edge.example.com','path':'/ci_xhttp_fixture','mode':'packet-up','client':{'client-fingerprint':'chrome'}}
+pids={u:agent.cmd(['systemctl','show',u,'-p','MainPID','--value']) for u in ['xr','sb','caddy-sub','argo']}
+assert xhttp.stage(settings)['ready']
+candidate=xhttp.candidate();candidate.update(server='127.0.0.1',port=18084,tls=False);candidate.pop('ech-opts',None)
+candidate['xhttp-opts']['host']='edge.example.com'
+result=probe.check_case({'name':'xhttp','node':candidate,'expected_ips':['127.0.0.1']},https_check=checked(probe_https),udp_check=checked(probe_udp))
+assert all(result[k] for k in ('https_ok','exit_ok','udp_ok')),result
+assert pids=={u:agent.cmd(['systemctl','show',u,'-p','MainPID','--value']) for u in pids}
+assert before=={p:Path(p).read_bytes() for p in before}
+xhttp.recover()
+assert pids=={u:agent.cmd(['systemctl','show',u,'-p','MainPID','--value']) for u in pids}
+print('PASS additive XHTTP Encryption HTTPS/UDP and recovery without existing service restart',flush=True)
+
+echo.close()

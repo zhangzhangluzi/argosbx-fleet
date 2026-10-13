@@ -20,9 +20,9 @@ flowchart LR
 从 GitHub Release 下载版本包和 SHA256SUMS，核验后运行：
 ```sh
 sha256sum -c SHA256SUMS
-python3 install.py argosbx-fleet-v1.1.6.tar.gz --sha256 <已核对的SHA256>
+python3 install.py argosbx-fleet-v1.2.0.tar.gz --sha256 <已核对的SHA256>
 ```
-安装到 `/opt/argosbx-fleet/v1.1.6`，原子更新 `current` 符号链接。同一版本内容不可覆盖。升级使用相同命令；数据与凭据不在发布包内。
+安装到 `/opt/argosbx-fleet/v1.2.0`，原子更新 `current` 符号链接。同一版本内容不可覆盖。升级使用相同命令；数据与凭据不在发布包内。
 ## 配置入口
 复制 `templates/servers.example.json` 到私有路径，设置权限 0600；通过 `ARGOSBX_SERVERS_FILE` 指定。`ARGOSBX_WORKSPACE` 用于解析相对 SSH 路径；`ARGOSBX_STATE` 为计划和恢复日志目录。设置 `coordinator` 为运行 Sub-Store 的服务器 ID，使用该机原生 `flock` 排除跨工作站同时发布。每次 Sub-Store 请求前后检查锁连接；检测到连接断开就停止写入并保留恢复日志。它不提供服务端数据库 fencing，已在途的请求仍须回读确认。
 初次接管现有安装：向各 VPS `agent.py adopt` 标准输入传递 `{server_id, services}`；services 是原生配置完整路径到 systemd unit 的映射。程序读取实际端口、TLS 参数、凭据和源节点，校验两个内核并确认接管前后正式节点等价，再保存 `/etc/argosbx-fleet/server.json`。同类协议存在多个入站时拒绝自动猜测；需要先明确映射。
@@ -116,3 +116,21 @@ Clash/FlClash、Stash 将这个具体 Tailnet 域名交给本机 MagicDNS `100.1
 ## AI 专用入口补齐
 NotebookLM (`notebooklm.google` 与当前跳转目标 `notebook.google`)、Copilot (`copilot.microsoft.com`、`copilot.com`、`copilot.cloud.microsoft`)、Grok (`grok.com`、`grok.x.ai`、`accounts.x.ai`) 的专用域名和子域名跟随 `AI线路`。Clash / Stash / Shadowrocket 的 AI 规则集保持一致，原 NotebookLM `.google.com` 入口继续保留。仅增加这些专用域名，不将整个 Google、Microsoft、Bing、X 平台或通用账户域名改为 AI 分流；去广告优先级与 DNS 策略保持不变。
 验证来源：[NotebookLM 入口及重定向](https://notebooklm.google/)、[Copilot 官方入口](https://copilot.com/)、[Grok 入口与账户说明](https://docs.x.ai/grok/faq)。更改 `AI线路` 只影响新建连接；如果仍选择 `日常线路`，AI 会继续跟随日常选择。
+
+## v1.2：无中断 XHTTP CF 入口与客户端优化
+SSH 使用私有 inventory 的 identity_file 和可信 known_hosts，不依赖临时 ControlMaster；管理私钥不得打包发布。
+`client` 按协议限制字段：QUIC 不接受 TCP Fast Open，AnyTLS 可设置 `min-idle-session`（0—8）。客户端字段变更不会重写原生监听，因此不要求重启。保留一个空闲会话属于小流量复用优化，不保证增加持续下载带宽。
+`health.interval` 保持 900/1800 秒，新增 `health.tolerance`（0—300ms，默认100）统一三端切换容差；健康检查仍是轻量连通性检查，不冒充吞吐/通话验收。
+AI 域名集中于 `routing_policy.py`。Mihomo 将这些域名的 DoH 出站绑定 AI线路，节点与 ECH 引导仍独立直连，避免解析循环。Stash 保留原生 DNS 路由，不下发 Mihomo 的策略组 URL 语法；Shadowrocket 继续由节点处理代理域名解析。
+现有安装首次增加 `protocols.xhttp`：显式 enabled、listen=127.0.0.1、port（独立闲置端口）、sni（现有 CF 域名）、path（随机纯路径）、mode=packet-up 和 client。复用 Xray 二进制，独立 `argosbx-xhttp.service`，VLESS Encryption 内层加密和 CF TLS 外层加密；只监听回环，不开放额外公网端口。
+```
+python3 fleetctl.py xhttp-stage --server us
+# 使用已安装 FlClash 的隔离实例及其他 VPS 原生客户端验收 HTTPS、出口和 UDP。
+python3 fleetctl.py xhttp-commit --server us
+python3 fleetctl.py protocol-plan --server us
+python3 fleetctl.py protocol-apply --server us
+python3 servers.py plan
+python3 servers.py publish
+```
+验收失败使用 `xhttp-recover`，只恢复本次 CF 路由并移除新增服务。stage 不更新源订阅，commit 后才进入正常登记；未完成事务阻止正式发布。已提交入口的后续启停、调参、删除使用正常协议管理，需要重启时只影响独立 XHTTP 服务。同类新入站不会自动承诺无中断。
+XHTTP 路由覆盖路径下的会话与序号，原 WS 路径保留；复用使用显式 `reuse-settings`。三种订阅分别通过 Sub-Store 原生转换，必须核验 XHTTP 与 Encryption 字段未丢失。官方支持与真机验收分开记录；本仓库不宣称已经验证用户手机上的 Stash/Shadowrocket。

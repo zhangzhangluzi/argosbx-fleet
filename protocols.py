@@ -3,14 +3,20 @@ import copy
 import ipaddress
 import re
 
-IDS=('reality','hy2','cf','anytls','shadowtls','salamander')
-LABELS={'reality':'VLESS-REALITY-Vision','hy2':'Hysteria2','cf':'CF入口-VMess-WS-TLS','anytls':'AnyTLS','shadowtls':'SS2022-ShadowTLS-v3','salamander':'Hysteria2-Salamander'}
-FIELDS={'type','enabled','port','sni','certificate','cover_host','cover_port','listen','padding_scheme','ws_path','alpn','client'}
-CLIENT_FIELDS={'idle-session-check-interval','idle-session-timeout','fast-open','client-fingerprint','udp-over-tcp','udp-over-tcp-version'}
+IDS=('reality','hy2','cf','anytls','shadowtls','salamander','xhttp')
+LABELS={'reality':'VLESS-REALITY-Vision','hy2':'Hysteria2','cf':'CF入口-VMess-WS-TLS','anytls':'AnyTLS','shadowtls':'SS2022-ShadowTLS-v3','salamander':'Hysteria2-Salamander','xhttp':'CF入口-VLESS-XHTTP-TLS'}
+FIELDS={'type','enabled','port','sni','certificate','cover_host','cover_port','listen','padding_scheme','ws_path','alpn','client','path','mode'}
+CLIENT_FIELDS={'idle-session-check-interval','idle-session-timeout','min-idle-session','fast-open','client-fingerprint','udp-over-tcp','udp-over-tcp-version'}
+CLIENT_BY_TYPE={
+    'reality':{'fast-open','client-fingerprint'}, 'cf':{'fast-open','client-fingerprint'},
+    'xhttp':{'client-fingerprint'}, 'hy2':set(), 'salamander':set(),
+    'anytls':{'fast-open','client-fingerprint','idle-session-check-interval','idle-session-timeout','min-idle-session'},
+    'shadowtls':{'fast-open','client-fingerprint','udp-over-tcp','udp-over-tcp-version'},
+}
 COMMON={'enabled','port','listen','client'}
 EXTRA={'reality':{'sni','cover_host','cover_port'},'hy2':{'sni','certificate','alpn'},
        'cf':{'sni','ws_path'},'anytls':{'sni','certificate','alpn','padding_scheme'},
-       'shadowtls':{'cover_host','cover_port'},'salamander':{'sni','certificate','alpn'}}
+       'shadowtls':{'cover_host','cover_port'},'salamander':{'sni','certificate','alpn'},'xhttp':{'sni','path','mode'}}
 
 def protocol_type(ident,settings):
     kind=settings.get('type',ident)
@@ -36,18 +42,21 @@ def validate_settings(settings,complete=False):
             if k in p and not re.fullmatch(r'(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}',p[k]):raise ValueError('TLS 域名无效')
         if 'listen' in p:
             ipaddress.ip_address(p['listen'])
-            if kind=='cf' and not ipaddress.ip_address(p['listen']).is_loopback:raise ValueError('CF 源站只允许监听回环地址')
-        if 'listen' in p and kind!='cf' and (ipaddress.ip_address(p['listen']).is_loopback or ipaddress.ip_address(p['listen']).is_multicast):raise ValueError('公开直连入站不能只监听回环或组播地址')
+            if kind in ('cf','xhttp') and not ipaddress.ip_address(p['listen']).is_loopback:raise ValueError('CF 源站只允许监听回环地址')
+        if 'listen' in p and kind not in ('cf','xhttp') and (ipaddress.ip_address(p['listen']).is_loopback or ipaddress.ip_address(p['listen']).is_multicast):raise ValueError('公开直连入站不能只监听回环或组播地址')
+        if 'path' in p and (not isinstance(p['path'],str) or not re.fullmatch(r'/[A-Za-z0-9_-]{8,128}',p['path'])):raise ValueError('XHTTP 路径无效')
+        if 'mode' in p and p['mode'] not in ('packet-up','stream-up'):raise ValueError('CF XHTTP 仅支持 packet-up / stream-up')
         if 'ws_path' in p and isinstance(p['ws_path'],str) and any(c in p['ws_path'] for c in ('?','#','%','\\',':')):raise ValueError('WS 路径必须为纯路径，不能包含查询参数、片段或编码分隔符')
         if 'ws_path' in p and (not isinstance(p['ws_path'],str) or not 1<=len(p['ws_path'])<=2048 or any(c.isspace() for c in p['ws_path'])):raise ValueError('WS 路径无效')
         if 'certificate' in p and not re.fullmatch(r'[a-zA-Z0-9_-]{1,64}',p['certificate']):raise ValueError('证书引用无效')
         if 'padding_scheme' in p and (kind!='anytls' or not isinstance(p['padding_scheme'],list) or any(not isinstance(x,str) for x in p['padding_scheme'])):raise ValueError('padding_scheme 无效')
         if 'alpn' in p and (not isinstance(p['alpn'],list) or any(not isinstance(x,str) or not x for x in p['alpn'])):raise ValueError('ALPN 无效')
         if 'client' in p:
-            if not isinstance(p['client'],dict) or set(p['client'])-CLIENT_FIELDS:raise ValueError('客户端参数无效')
+            if not isinstance(p['client'],dict) or set(p['client'])-CLIENT_BY_TYPE[kind]:raise ValueError('该协议的客户端参数无效: '+ident)
             for key,value in p['client'].items():
                 if key in ('fast-open','udp-over-tcp') and type(value) is not bool:raise ValueError('客户端开关必须为布尔值')
                 if key in ('idle-session-check-interval','idle-session-timeout') and (type(value) is not int or not 0<=value<=86400):raise ValueError('连接复用周期无效')
+                if key=='min-idle-session' and (type(value) is not int or not 0<=value<=8):raise ValueError('保留空闲会话必须为 0 到 8')
                 if key=='udp-over-tcp-version' and (type(value) is not int or value not in (1,2)):raise ValueError('UDP over TCP 版本无效')
                 if key=='client-fingerprint' and (not isinstance(value,str) or not re.fullmatch(r'[a-zA-Z0-9_-]{1,32}',value)):raise ValueError('客户端 TLS 指纹无效')
 
@@ -68,7 +77,7 @@ def migrate_references(server,names,certificate=None):
         if role!='certificate':target['domains'][role]=name
     if names.get('cf'):
         for ident,p in target['protocols'].items():
-            if protocol_type(ident,p)=='cf' and p['sni']==old:p['sni']=names['cf']
+            if protocol_type(ident,p) in ('cf','xhttp') and p['sni']==old:p['sni']=names['cf']
     if certificate:
         target['certificates']['domain']=certificate
         for ident,p in target['protocols'].items():
@@ -77,6 +86,7 @@ def migrate_references(server,names,certificate=None):
 
 def classify(node):
     t=node.get('type')
+    if t=='vless' and node.get('network')=='xhttp':return 'xhttp'
     if t=='vless' and node.get('reality-opts'):return 'reality'
     if t=='hysteria2':return 'salamander' if node.get('obfs')=='salamander' else 'hy2'
     if t=='vmess' and node.get('network')=='ws' and node.get('tls'):return 'cf'
@@ -100,6 +110,7 @@ def adopt(configs,clients,services):
         for n in c['inbounds']:
             t=n.get('type',n.get('protocol'))
             ident={'hysteria':'hy2','anytls':'anytls','shadowtls':'shadowtls','hysteria2':'salamander','vmess':'cf','vless':'reality'}.get(t)
+            if t=='vless' and n.get('streamSettings',{}).get('network')=='xhttp':ident='xhttp'
             if not ident:continue
             if ident in bindings:raise ValueError('同协议存在多个入站，需要显式映射')
             bindings[ident]={'path':path,'tag':n['tag'],'core':'sing-box' if 'type' in n else 'xray','service':services[path],'inbound':copy.deepcopy(n)}
@@ -119,8 +130,9 @@ def adopt(configs,clients,services):
             p.update(sni=r['serverNames'][0],cover_host=host,cover_port=int(port))
         if ident=='shadowtls':p.update(cover_host=n['handshake']['server'],cover_port=n['handshake']['server_port'])
         if ident=='cf':p.update(sni=templates[ident]['servername'],ws_path=n['streamSettings']['wsSettings']['path'])
+        if ident=='xhttp':p.update(sni=templates[ident]['servername'],path=n['streamSettings']['xhttpSettings']['path'],mode=n['streamSettings']['xhttpSettings']['mode'])
         if ident=='anytls':p['padding_scheme']=n.get('padding_scheme',[])
-        p['client']={k:v for k,v in templates[ident].items() if k in {'idle-session-check-interval','idle-session-timeout','fast-open','client-fingerprint','udp-over-tcp','udp-over-tcp-version'}}
+        p['client']={k:v for k,v in templates[ident].items() if k in CLIENT_BY_TYPE[ident]}
         state['protocols'][ident]=p
     validate_settings(state['protocols'])
     return state
@@ -147,7 +159,9 @@ def render(configs,state,desired):
             tls=n.get('tls',n.get('streamSettings',{}).get('tlsSettings',{}))
             actual={'certificate_file':tls.get('certificate_path'),'key_file':tls.get('key_path')} if b['core']=='sing-box' else {'certificate_file':tls['certificates'][0]['certificateFile'],'key_file':tls['certificates'][0]['keyFile']}
             same_certificate=actual==cert
-        if p==state['protocols'][ident] and same_certificate:continue
+        # Client-only tuning must never normalize/rewrite a running native listener.
+        native_settings=lambda value:{k:v for k,v in value.items() if k!='client'}
+        if native_settings(p)==native_settings(state['protocols'][ident]) and same_certificate:continue
         n['listen']=p['listen'];n['listen_port' if b['core']=='sing-box' else 'port']=p['port']
         if 'certificate' in p:
             c=state['certificates'][p['certificate']]
@@ -161,6 +175,7 @@ def render(configs,state,desired):
             r=n['streamSettings']['realitySettings'];r['serverNames']=[p['sni']];r['target']=p['cover_host']+':'+str(p['cover_port']);r.pop('dest',None)
         if kind=='shadowtls':n['handshake'].update(server=p['cover_host'],server_port=p['cover_port'])
         if kind=='cf':n['streamSettings']['wsSettings']['path']=p['ws_path']
+        if kind=='xhttp':n['streamSettings']['xhttpSettings'].update(path=p['path'],mode=p['mode'])
         if kind=='anytls':n['padding_scheme']=p['padding_scheme']
     # Include auxiliary/unmanaged inbounds (for example ShadowTLS's inner SS)
     # when checking conflicts, rather than checking only published protocols.
@@ -197,6 +212,9 @@ def export(configs,state):
         elif kind=='cf':
             node.update(port=443,server=p['sni'],servername=p['sni'],uuid=n['settings']['clients'][0]['id'])
             node['ws-opts'].update(path=p['ws_path']);node['ws-opts'].setdefault('headers',{})['Host']=p['sni']
+        elif kind=='xhttp':
+            node.update(port=443,server=p['sni'],servername=p['sni'],uuid=n['settings']['clients'][0]['id'])
+            node['xhttp-opts'].update(path=p['path'],mode=p['mode'],host=p['sni'])
         from ech import client_options
         node.pop('ech-opts',None)
         node.update(client_options(state,ident,n))

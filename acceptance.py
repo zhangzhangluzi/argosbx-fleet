@@ -15,7 +15,7 @@ def cases(server,nodes):
         if not p['enabled']:continue
         n=templates.get(ident)
         if not n or classify(n)!=protocol_type(ident,p):raise ValueError('验收节点缺失或协议不符')
-        for family in (['cf'] if protocol_type(ident,p)=='cf' else families(ident,p,server)):
+        for family in (['cf'] if protocol_type(ident,p) in ('cf','xhttp') else families(ident,p,server)):
             node=copy.deepcopy(n);node['server']=p['sni'] if family=='cf' else server[family]
             result.append({'name':ident+'/'+family,'node':node,'expected_ips':[server[f] for f in ('ipv4','ipv6') if server[f]]})
     if len(templates)!=sum(p['enabled'] for p in server['protocols'].values()):raise ValueError('验收节点集合不一致')

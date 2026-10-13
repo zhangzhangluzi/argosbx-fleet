@@ -75,7 +75,7 @@ def client_options(state, ident, inbound):
     from protocols import protocol_type
     if state.get('ech_policy') != 1:return {}
     kind = protocol_type(ident, state['protocols'][ident])
-    if kind == 'cf':
+    if kind in ('cf','xhttp'):
         return {'ech-opts': {'enable': True, 'query-server-name': PUBLIC_NAME, '_dns': DNS}, 'client-fingerprint': 'chrome'}
     if kind not in DIRECT_TYPES:return {}
     saved = state.get('ech', {}).get(ident, {})

@@ -6,7 +6,17 @@ import subprocess
 import uuid
 from protocols import protocol_type,validate_settings,LABELS
 
-CORES={'reality':'xray','hy2':'xray','cf':'xray','anytls':'sing-box','shadowtls':'sing-box','salamander':'sing-box'}
+CORES={'reality':'xray','hy2':'xray','cf':'xray','anytls':'sing-box','shadowtls':'sing-box','salamander':'sing-box','xhttp':'xray'}
+
+def vless_encryption():
+    import re
+    text=subprocess.run(['/root/agsbx/xray','vlessenc'],capture_output=True,text=True,check=True,timeout=15).stdout
+    dec=re.findall(r'decryption[^\n]*?(mlkem768x25519plus\.[^\s\"]+)',text,re.I)
+    enc=re.findall(r'encryption[^\n]*?(mlkem768x25519plus\.[^\s\"]+)',text,re.I)
+    # Match encryption as a complete label, not the suffix of decryption.
+    enc=[x for x in enc if x not in dec]
+    if not dec or not enc:raise ValueError('Xray 未返回 VLESS Encryption 密钥')
+    return dec[-1],enc[-1]
 
 def x25519(binary='/root/agsbx/xray'):
     p=subprocess.run([binary,'x25519'],text=True,capture_output=True,check=True,timeout=10)
@@ -41,6 +51,10 @@ def create(ident,p,certificates,keygen=x25519):
     elif kind=='cf':
         native.update(protocol='vmess',settings={'clients':[{'id':uid}]},streamSettings={'network':'ws','security':'none','wsSettings':{'path':p['ws_path']}})
         node.update(type='vmess',uuid=uid,server=p['sni'],servername=p['sni'],port=443,tls=True,network='ws',alterId=0,cipher='auto',**{'ws-opts':{'path':p['ws_path'],'headers':{'Host':p['sni']}},'skip-cert-verify':False})
+    elif kind=='xhttp':
+        private,public=vless_encryption()
+        native.update(protocol='vless',settings={'clients':[{'id':uid}],'decryption':private},streamSettings={'network':'xhttp','security':'none','xhttpSettings':{'path':p['path'],'mode':p['mode']}})
+        node.update(type='vless',uuid=uid,encryption=public,server=p['sni'],servername=p['sni'],port=443,tls=True,network='xhttp',**{'xhttp-opts':{'path':p['path'],'host':p['sni'],'mode':p['mode'],'reuse-settings':{'max-concurrency':'8-16'}},'skip-cert-verify':False,'client-fingerprint':'chrome'})
     elif kind=='anytls':
         native.update(type='anytls',users=[{'name':ident,'password':password}],padding_scheme=p['padding_scheme'],tls=tls)
         node.update(type='anytls',password=password,sni=p['sni'],**{'skip-cert-verify':False})

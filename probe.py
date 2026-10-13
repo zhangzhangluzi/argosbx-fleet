@@ -14,6 +14,9 @@ def outbound(n):
         if n.get('tls'):out['tls']=tls
     elif n['type'] in ('anytls','hysteria2'):
         out.update(password=n['password'],tls=tls)
+        if n['type']=='anytls':
+            for key in ('idle-session-check-interval','idle-session-timeout','min-idle-session'):
+                if key in n:out[key.replace('-','_')]=str(n[key])+'s' if key!='min-idle-session' else n[key]
         if n.get('alpn'):tls['alpn']=n['alpn']
         if n.get('obfs'):out['obfs']={'type':n['obfs'],'password':n['obfs-password']}
     elif n['type']=='ss':
@@ -29,6 +32,16 @@ def outbound(n):
         if ech.get('query-server-name'):tls['ech']['query_server_name']=ech['query-server-name']
         if n['type'] in ('vmess','anytls'):tls['utls']={'enabled':True,'fingerprint':n.get('client-fingerprint','chrome')}
     return [out]+extras
+
+def xhttp_client(n,port):
+    tls={'serverName':n['servername'],'fingerprint':n.get('client-fingerprint','chrome'),'alpn':['h2']}
+    ech=n.get('ech-opts',{})
+    if ech.get('enable'):tls['echConfigList']=ech.get('config') or ech.get('query-server-name','cloudflare-ech.com')+'+https://dns.alidns.com/dns-query'
+    opts=n['xhttp-opts']
+    stream={'network':'xhttp','security':'tls' if n.get('tls') else 'none','xhttpSettings':{'path':opts['path'],'host':opts.get('host'),'mode':opts['mode'],'extra':{'xmux':{'maxConcurrency':'8-16'}}}}
+    if n.get('tls'):stream['tlsSettings']=tls
+    return {'log':{'loglevel':'warning'},'inbounds':[{'listen':'127.0.0.1','port':port,'protocol':'socks','settings':{'udp':True}}],
+            'outbounds':[{'protocol':'vless','settings':{'vnext':[{'address':n['server'],'port':n['port'],'users':[{'id':n['uuid'],'encryption':n['encryption']}]}]},'streamSettings':stream}]}
 
 def recv(sock,size):
     data=b''
@@ -80,12 +93,15 @@ def check_case(case,binary='/root/agsbx/sing-box',https_check=https,udp_check=ud
     with tempfile.TemporaryDirectory(prefix='fleet-probe-') as temp:
         root=Path(temp)
         with socket.socket() as sock:sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]
-        config={'log':{'level':'error'},'inbounds':[{'type':'socks','listen':'127.0.0.1','listen_port':port}], 'outbounds':outbound(case['node'])}
+        is_xhttp=case['node'].get('network')=='xhttp'
+        config=xhttp_client(case['node'],port) if is_xhttp else {'log':{'level':'error'},'inbounds':[{'type':'socks','listen':'127.0.0.1','listen_port':port}], 'outbounds':outbound(case['node'])}
         # Hostname-based CF ingress must resolve without any local VPN or TUN dependency.
         config['dns']={'servers':[{'type':'https','tag':'local','server':'223.5.5.5','path':'/dns-query'},
             {'type':'https','tag':'ech','server':'dns.alidns.com','path':'/dns-query','domain_resolver':'local'}],
             'rules':[{'domain':['cloudflare-ech.com'],'server':'ech'}],'final':'local'}
         config['route']={'default_domain_resolver':'local'}
+        if is_xhttp:
+            config.pop('dns');config.pop('route');binary=str(Path(binary).with_name('xray'))
         path=root/'client.json';path.write_text(json.dumps(config));path.chmod(0o600)
         with (root/'log').open('w') as log:
             proc=subprocess.Popen([binary,'run','-c',str(path)],stdout=log,stderr=log)

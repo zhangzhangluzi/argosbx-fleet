@@ -22,10 +22,10 @@ for fmt in ('clash','stash'):
     base.pop('proxies',None);base.pop('proxy-groups',None)
     base['rules']=[r.replace(',UDP线路', ',日常线路') for r in base['rules']]
     base=harden_config(base,fmt,hosts=node_hosts,tailscale=inventory.get('tailscale'))
-    health={'url':'https://www.gstatic.com/generate_204','interval':inventory.get('health',{}).get('interval',900),'tolerance':50,'lazy':False}
+    health={'url':'https://www.gstatic.com/generate_204','interval':inventory.get('health',{}).get('interval',900),'tolerance':inventory.get('health',{}).get('tolerance',100),'lazy':False}
     if fmt == 'clash':
         base['unified-delay']=True
-        health.update({'timeout':8000,'max-failed-times':3,'expected-status':'204','tolerance':100})
+        health.update({'timeout':8000,'max-failed-times':3,'expected-status':'204'})
     script='''function operator(input) {
  const source=ProxyUtils.yaml.safeLoad(input.$content);
  const proxies=CONVERSION;
@@ -50,7 +50,7 @@ for fmt in ('clash','stash'):
  return input;
 }'''.replace('COUNTRY_PREFIXES',json.dumps(country_prefixes,ensure_ascii=False)).replace('PURPOSE_GROUPS',json.dumps(purpose_groups,ensure_ascii=False)).replace('BASE',json.dumps(base,ensure_ascii=False)).replace('HEALTHCHECK',json.dumps(health,ensure_ascii=False)).replace('CONVERSION',"ProxyUtils.produce(ProxyUtils.parse(ProxyUtils.yaml.safeDump(source)), 'Stash', 'internal')" if fmt=='stash' else 'source.proxies')
     if fmt == 'clash':
-        script = (root/'ech-policy.js').read_text().replace('CF_HOSTS',json.dumps(list(dict.fromkeys([s['domains']['cf'] for s in specs.values() if s['domains']['cf']]+[p['sni'] for s in specs.values() for i,p in s.get('protocols',{}).items() if protocol_type(i,p)=='cf' and p['enabled']])))) + '\n' + script.replace('const proxies=source.proxies;', 'const proxies=applyCfEch(source.proxies);')
+        script = (root/'ech-policy.js').read_text().replace('CF_HOSTS',json.dumps(list(dict.fromkeys([s['domains']['cf'] for s in specs.values() if s['domains']['cf']]+[p['sni'] for s in specs.values() for i,p in s.get('protocols',{}).items() if protocol_type(i,p) in ('cf','xhttp') and p['enabled']])))) + '\n' + script.replace('const proxies=source.proxies;', 'const proxies=applyCfEch(source.proxies);')
     files.append({'name':fmt,'displayName':'ArgoSBX · '+fmt,'type':'mihomoConfig','sourceType':'collection','sourceName':'all','process':[{'type':'Script Operator','args':{'mode':'script','content':script}}]})
 # Shadowrocket configuration keeps the accepted DNS, Play and Telegram rules.
 sr=harden_shadowrocket((root/'templates'/'base-shadowrocket.conf').read_text(),hosts=node_hosts)
@@ -68,17 +68,17 @@ for code,label in countries.items():
             kind=protocol_type(ident,p)
             if not p.get('enabled'):continue
             label_name=node_label(ident,p)
-            if kind=='cf':
+            if kind in ('cf','xhttp'):
                 if p.get('sni') or server['domains']['cf']:names.append(server['name']+'-T-'+label_name)
             else:
                 names += [node_name(label_name,{'ipv4':'IPv4','ipv6':'IPv6'}[f]) for f in node_families(ident,p,server)]
-    groups.append('地区-'+label+' = url-test, '+', '.join(names)+f", url=https://www.gstatic.com/generate_204, interval={inventory.get('health',{}).get('interval',900)}, timeout=5, tolerance=50")
+    groups.append('地区-'+label+' = url-test, '+', '.join(names)+f", url=https://www.gstatic.com/generate_204, interval={inventory.get('health',{}).get('interval',900)}, timeout=5, tolerance={inventory.get('health',{}).get('tolerance',100)}")
 sr=sr[:start]+'\n'.join(groups)+'\n'+sr[end:]
 sr=sr.replace('PROTOCOL,UDP,UDP线路', 'PROTOCOL,UDP,日常线路')
 files.append({'name':'shadowrocket-config','displayName':'Shadowrocket 自动策略','source':'local','content':sr,'process':[]})
 payload={'subscriptions':subscriptions,'collections':[{'name':'all','displayName':' · '.join(countries.values()),'subscriptions':[s['subscription']['name'] for s in specs.values()],'process':[]}],'files':files}
 payload['collections'] += [{'name':'shadowrocket-'+code.lower(),'displayName':'ArgoSBX · '+label,'subscriptions':[s['subscription']['name'] for s in specs.values() if s['country']==code],'process':[]} for code,label in countries.items()]
-export_processor={'type':'Response Transformer','customName':'FlClash 完整配置导出','args':{'mode':'script','content':(root/'flclash-response-transformer.js').read_text().replace('CF_HOSTS',json.dumps(list(dict.fromkeys([s['domains']['cf'] for s in specs.values() if s['domains']['cf']]+[p['sni'] for s in specs.values() for i,p in s.get('protocols',{}).items() if protocol_type(i,p)=='cf' and p['enabled']])))).replace('PROFILE_TITLES',json.dumps({'all':'ArgoSBX '+'-'.join(countries),**{'shadowrocket-'+code.lower():'ArgoSBX '+code for code in countries},**{s['subscription']['name']:'ArgoSBX '+s['name'] for s in specs.values()}},ensure_ascii=False)),'arguments':{'profile':'clash'}}}
+export_processor={'type':'Response Transformer','customName':'FlClash 完整配置导出','args':{'mode':'script','content':(root/'flclash-response-transformer.js').read_text().replace('CF_HOSTS',json.dumps(list(dict.fromkeys([s['domains']['cf'] for s in specs.values() if s['domains']['cf']]+[p['sni'] for s in specs.values() for i,p in s.get('protocols',{}).items() if protocol_type(i,p) in ('cf','xhttp') and p['enabled']])))).replace('PROFILE_TITLES',json.dumps({'all':'ArgoSBX '+'-'.join(countries),**{'shadowrocket-'+code.lower():'ArgoSBX '+code for code in countries},**{s['subscription']['name']:'ArgoSBX '+s['name'] for s in specs.values()}},ensure_ascii=False)),'arguments':{'profile':'clash'}}}
 for item in payload['subscriptions']+payload['collections']:
     item['process'].append(export_processor)
 from fleet import STATE

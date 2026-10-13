@@ -18,9 +18,35 @@ def remote(config,server,command,payload=None,allow_restart=False):
     return json.loads(p.stdout)
 
 def main():
-    p=argparse.ArgumentParser();p.add_argument('command',choices=['inspect','protocol-plan','protocol-apply','protocol-recover','domain-plan','domain-stage','domain-commit','domain-recover']);p.add_argument('--config');p.add_argument('--server',required=True);p.add_argument('--allow-restart',action='store_true');a=p.parse_args()
+    p=argparse.ArgumentParser();p.add_argument('command',choices=['inspect','protocol-plan','protocol-apply','protocol-recover','domain-plan','domain-stage','domain-commit','domain-recover','xhttp-stage','xhttp-commit','xhttp-recover']);p.add_argument('--config');p.add_argument('--server',required=True);p.add_argument('--allow-restart',action='store_true');a=p.parse_args()
     config=read(a.config);server=servers(config)[a.server]
-    if a.command=='inspect':result=remote(config,a.server,'inspect')
+    if a.command.startswith('xhttp-'):
+        import tunnels
+        cf=Cloudflare(config['cloudflare']['token_file']);journal=STATE/(a.server+'-xhttp-cf-journal.json')
+        if a.command=='xhttp-stage':
+            previous=remote(config,a.server,'inspect')['protocols']
+            result=remote(config,a.server,'xhttp-stage',server['protocols']['xhttp'])
+            if not journal.exists():
+                scoped=copy.deepcopy(server);scoped['protocols']={**previous,'xhttp':server['protocols']['xhttp']}
+                plan=tunnels.change_plan(cf,scoped,previous)
+                if plan:stage(cf,plan,journal)
+            result['verification_pending']=True
+        elif a.command=='xhttp-commit':
+            if not journal.exists():raise ValueError('CF 路由验收日志缺失')
+            j=json.loads(journal.read_text());plan=j['plan']
+            if not j['ready'] or cf.call(plan['tunnel_path'])['result']['config']!=plan['after']:raise ValueError('CF 路由尚未就绪或已变化')
+            live=remote(config,a.server,'inspect')
+            if 'xhttp-journal.json' not in live['unfinished_transactions']:
+                if live['protocols'].get('xhttp')!=server['protocols']['xhttp'] or not all(live.get(k) for k in ('native_configuration_matches','services_active','source_matches')):
+                    raise ValueError('XHTTP 提交状态不匹配，保留 CF 日志')
+                result={'committed':True,'existing_services_restarted':False}
+            else:result=remote(config,a.server,'xhttp-commit')
+            journal.unlink()
+        else:
+            # Restore only owned CF changes, then remove only the staged service.
+            if journal.exists():recover(cf,journal)
+            result=remote(config,a.server,'xhttp-recover')
+    elif a.command=='inspect':result=remote(config,a.server,'inspect')
     elif a.command=='protocol-plan':result=remote(config,a.server,'plan',{'protocols':server['protocols'],'certificates':server['certificates']})
     elif a.command=='protocol-apply':
         import tunnels
@@ -29,8 +55,8 @@ def main():
         previous=checked['previous_protocols']
         if checked['restart_required'] and not a.allow_restart:raise ValueError('新入站需要原生服务重启；未修改服务或 Cloudflare，请在维护窗口使用 --allow-restart')
         from protocols import protocol_type
-        old_cf={i:p for i,p in previous.items() if protocol_type(i,p)=='cf'}
-        new_cf={i:p for i,p in server['protocols'].items() if protocol_type(i,p)=='cf'}
+        old_cf={i:p for i,p in previous.items() if protocol_type(i,p) in ('cf','xhttp')}
+        new_cf={i:p for i,p in server['protocols'].items() if protocol_type(i,p) in ('cf','xhttp')}
         cf=None;cf_journal=STATE/(a.server+'-protocol-cf.json')
         if old_cf!=new_cf:
             cf=Cloudflare(config['cloudflare']['token_file'])

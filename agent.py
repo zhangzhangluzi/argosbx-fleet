@@ -53,6 +53,7 @@ def validate_native(state,values):
             cmd([BIN[core]]+(['run','-test'] if core=='xray' else ['check'])+['-c',str(f)])
 
 def plan(desired):
+    if (HOME/'xhttp-journal.json').exists():raise ValueError('XHTTP 验收事务待提交或恢复')
     if JOURNAL.exists():raise ValueError('有未完成事务，请先 recover；未覆盖原计划')
     state=load();before=configs(state)
     for path,wanted in state['native_sha256'].items():
@@ -153,6 +154,7 @@ def commit():
     return {'committed':True}
 
 def export_source(_applying=False):
+    if (HOME/'xhttp-journal.json').exists() and not _applying:raise ValueError('XHTTP 验收未完成，保留原订阅')
     if JOURNAL.exists() and not _applying:raise ValueError('未完成事务，保留上一份订阅；请先 recover')
     state=load();current=configs(state)
     for path,h in state['native_sha256'].items():
@@ -234,9 +236,15 @@ def certificate_recover():
     journal.unlink();return {'recovered':True}
 
 def main():
-    p=argparse.ArgumentParser();p.add_argument('command',choices=['adopt','inspect','plan','planned','apply','commit','recover','export','certificate','certificate-recover']);p.add_argument('--allow-restart',action='store_true');p.add_argument('--defer-commit',action='store_true');a=p.parse_args()
+    p=argparse.ArgumentParser();p.add_argument('command',choices=['adopt','inspect','plan','planned','apply','commit','recover','export','certificate','certificate-recover','xhttp-stage','xhttp-candidate','xhttp-commit','xhttp-recover']);p.add_argument('--allow-restart',action='store_true');p.add_argument('--defer-commit',action='store_true');a=p.parse_args()
     with lock(HOME/'agent.lock'):
-        if a.command=='adopt':r=initialize(json.load(sys.stdin))
+        if a.command.startswith('xhttp-'):
+            import xhttp
+            # Reuse this module's paths and lock when executed as a script.
+            xhttp.agent=sys.modules[__name__]
+            action=a.command[6:]
+            r=xhttp.stage(json.load(sys.stdin)) if action=='stage' else getattr(xhttp,action)()
+        elif a.command=='adopt':r=initialize(json.load(sys.stdin))
         elif a.command=='inspect':
             s=load();r={k:s[k] for k in ['server_id','protocols','certificates','native_sha256']}
             r['native_configuration_matches']=all(sha(Path(p).read_text())==h for p,h in s['native_sha256'].items())

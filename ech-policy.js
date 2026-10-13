@@ -4,7 +4,9 @@ function applyCfEch(proxies) {
   const hosts = new Set(CF_HOSTS);
   return proxies.map(p => {
     if (!hosts.has(p.server)) return p;
-    if (p.type !== 'vmess' || p.network !== 'ws' || !p.tls ||
+    const supported = p.type === 'vmess' && p.network === 'ws' ||
+      p.type === 'vless' && p.network === 'xhttp';
+    if (!supported || !p.tls ||
         p.servername !== p.server || p['reality-opts']) {
       throw new Error('Unexpected Cloudflare TLS entrance');
     }

@@ -6,6 +6,7 @@ from pathlib import Path
 
 
 from fleet import host_map
+from routing_policy import AI_DOMAINS,ai_rules
 
 BOOTSTRAP = ['https://223.5.5.5/dns-query', 'https://223.6.6.6/dns-query']
 REMOTE = ['https://1.1.1.1/dns-query', 'https://1.0.0.1/dns-query']
@@ -70,7 +71,7 @@ def harden_config(original, client, hosts=None, tailscale=None):
     # avoid DNS so explicit app/domain policies remain first and DNS cannot loop.
     config['rules'] = guarded_rules([
         'RULE-SET,国内IP,DIRECT' if r == 'RULE-SET,国内IP,DIRECT,no-resolve' else r
-        for r in config['rules']], tailscale)
+        for r in ai_rules(config['rules'])], tailscale)
     dns = config['dns']
     dns['default-nameserver'] = list(BOOTSTRAP)
     dns.pop('fallback', None)
@@ -89,6 +90,7 @@ def harden_config(original, client, hosts=None, tailscale=None):
         dns.pop('direct-nameserver', None)
         dns.pop('direct-nameserver-follow-policy', None)
         dns['nameserver-policy'] = {**{'+.'+d:[u+'#日常线路' for u in REMOTE] for d in ['googleapis.cn','xn--ngstr-lra8j.com']}, **{'+.'+d:[LOCAL_DOH+'#DIRECT'] for d in FEISHU}, **{d:[u+'#日常线路' for u in REMOTE] for d in BUSINESS_CONSOLES}, '+.cn':[LOCAL_DOH+'#DIRECT'], 'rule-set:国内域名':[LOCAL_DOH+'#DIRECT']}
+        dns['nameserver-policy'].update({'+.'+d:[u+'#AI线路' for u in REMOTE] for d in AI_DOMAINS})
         dns['direct-nameserver']=[LOCAL_DOH+'#DIRECT']
         dns['direct-nameserver-follow-policy']=True
         dns['use-hosts'] = True
@@ -134,7 +136,7 @@ def harden_shadowrocket(original, hosts=None):
     next_section = result.find('\n[', rule_start)
     rule_end = next_section if next_section >= 0 else len(result)
     rules = [s for s in result[rule_start:rule_end].splitlines() if s.strip()]
-    result = result[:rule_start] + '\n' + '\n'.join(guarded_rules(rules)) + '\n' + result[rule_end:]
+    result = result[:rule_start] + '\n' + '\n'.join(guarded_rules(ai_rules(rules))) + '\n' + result[rule_end:]
     host_section = '[Host]\n' + '\n'.join(k + ' = ' + v for k, v in node_hosts.items()) + '\n'
     if '[Host]' not in result:
         result += '\n' + host_section

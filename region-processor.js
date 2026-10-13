@@ -4,7 +4,7 @@ function operator(proxies) {
   const ids={'VLESS-REALITY-Vision':'reality','Hysteria2':'hy2','AnyTLS':'anytls','SS2022-ShadowTLS-v3':'shadowtls','Hysteria2-Salamander':'salamander'};
   function check(p,id) {
     const desired=spec.protocols?.[id];
-    if(!desired)return true;
+    if(!desired)return !Object.keys(spec.protocols||{}).length;
     if(!desired.enabled)return false;
     if(id!=='cf' && p.port!==desired.port)throw new Error('Server port is not applied: '+id);
     if(desired.sni && (p.sni||p.servername)!==desired.sni)throw new Error('Server SNI is not applied: '+id);

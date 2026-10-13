@@ -67,6 +67,8 @@ def native_preflight(config):
             raise ValueError(server['id']+'：原生参数尚未应用，不能先发布客户端引用')
         if not live.get('native_configuration_matches') or not live.get('services_active'):
             raise ValueError(server['id']+'：服务未就绪或原生配置存在漂移')
+        if live.get('unfinished_transactions') or live.get('source_matches') is not True:
+            raise ValueError(server['id']+'：事务未恢复或订阅源与服务端不一致')
     with ThreadPoolExecutor(max_workers=min(4,max(1,len(configured)))) as pool:list(pool.map(check,configured))
 
 

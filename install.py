@@ -24,6 +24,8 @@ def install(archive,expected,destination):
         target=destination/version
         if target.exists():
             if (target/'manifest.json').read_bytes()!=(tmp/'manifest.json').read_bytes():raise ValueError('Immutable version already exists with different content')
+            if any(not (target/name).is_file() or (target/name).is_symlink() or hashlib.sha256((target/name).read_bytes()).hexdigest()!=digest for name,digest in files.items()):
+                raise ValueError('Installed release file checksum mismatch; current was not changed')
         else:shutil.copytree(tmp,target)
         link=destination/'current.next';link.unlink(missing_ok=True);link.symlink_to(version);os.replace(link,destination/'current')
     return {'installed':version,'service_restarts':0}

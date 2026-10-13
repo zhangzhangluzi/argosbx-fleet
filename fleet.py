@@ -80,7 +80,17 @@ def validate(data):
     interval=data.get('health',{}).get('interval',900)
     if type(interval) is not int or interval not in (900,1800): raise ValueError('health.interval 只支持 900 或 1800 秒')
     from protocols import validate_settings
-    for server in data['servers']: validate_settings(server.get('protocols',{}))
+    for server in data['servers']:
+        protocols=server.get('protocols',{})
+        validate_settings(protocols,complete=data['schema']==2)
+        if data['schema']==2 and (not protocols or not any(p['enabled'] for p in protocols.values())):
+            raise ValueError('每台已登记服务器至少保留一个启用协议；移除整机请从汇总配置中移除')
+        certs=server.get('certificates',{})
+        for p in protocols.values():
+            if 'certificate' in p:
+                cert=certs.get(p['certificate'],{})
+                if set(cert)!={'certificate_file','key_file'} or any(not isinstance(v,str) or not v.startswith('/') or '\n' in v for v in cert.values()):
+                    raise ValueError('证书引用缺失或路径不是绝对路径')
     return data
 
 

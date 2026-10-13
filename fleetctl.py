@@ -23,11 +23,12 @@ def main():
     if a.command=='inspect':result=remote(config,a.server,'inspect')
     elif a.command=='protocol-plan':result=remote(config,a.server,'plan',{'protocols':server['protocols'],'certificates':server['certificates']})
     elif a.command=='protocol-apply':result=remote(config,a.server,'apply',allow_restart=a.allow_restart)
-    elif a.command=='protocol-recover':result=remote(config,a.server,'recover')
+    elif a.command=='protocol-recover':result=remote(config,a.server,'recover',allow_restart=a.allow_restart)
     else:
         domain_plan=STATE/(a.server+'-domain-plan.json');journal=STATE/(a.server+'-domain-journal.json')
         cf=Cloudflare(config['cloudflare']['token_file'])
         if a.command=='domain-plan':
+            if journal.exists():raise ValueError('域名迁移未完成，请先恢复；未覆盖原计划')
             desired=server['domain_migration'];plan=build(cf,desired['zone'],server,desired['names'],desired['tunnel_id'])
             plan['inventory']=copy.deepcopy(config);save(domain_plan,plan)
             result={'dns_changes':len(plan['records']),'tunnel_changes':plan['before']!=plan['after'],'original_subscription_preserved':True}
@@ -42,15 +43,17 @@ def main():
         elif a.command=='domain-commit':
             j=json.loads(journal.read_text());plan=j['plan']
             if not j['ready'] or config!=plan['inventory']:raise ValueError('迁移计划未就绪或已过期')
+            if plan['names'].get('certificate') and not (j.get('certificate') or {}).get('ready'):
+                raise ValueError('证书阶段未完成，请先 domain-recover；未修改协议或订阅')
             updated=copy.deepcopy(config);target=servers(updated)[a.server]
             for role,name in plan['names'].items():
                 if role!='certificate':target['domains'][role]=name
-            if target['domains']['cf']:target['protocols']['cf']['sni']=target['domains']['cf']
+            if target['domains']['cf'] and 'cf' in target['protocols']:target['protocols']['cf']['sni']=target['domains']['cf']
             # Certificate switches use one explicit reference across TLS protocols.
             if j.get('certificate'):
                 target['certificates']['domain']=j['certificate']['certificate']
                 for ident in ('hy2','anytls','salamander'):
-                    target['protocols'][ident].update(certificate='domain',sni=plan['names']['certificate'])
+                    if ident in target['protocols']:target['protocols'][ident].update(certificate='domain',sni=plan['names']['certificate'])
             import socket,ipaddress
             # Confirm DNS before touching protocol identities or subscription objects.
             for role in ('ipv4','ipv6'):
@@ -97,7 +100,7 @@ def main():
                             publication.recover(recovery,config,publisher.get,publisher.request,publisher.digest)
                     old=j['plan']['inventory'];original=servers(old)[a.server]
                     # If the native apply was interrupted, recover its file journal first.
-                    remote(old,a.server,'recover')
+                    remote(old,a.server,'recover',allow_restart=a.allow_restart)
                     p=remote(old,a.server,'plan',{'protocols':original['protocols'],'certificates':original['certificates']})
                     if p['restart_required'] and not a.allow_restart:raise ValueError('恢复原证书需维护窗口 --allow-restart；DNS 尚未删除')
                     remote(old,a.server,'apply',allow_restart=a.allow_restart)

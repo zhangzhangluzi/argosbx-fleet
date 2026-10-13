@@ -62,7 +62,8 @@ for code,label in countries.items():
             return f"{server['name']}-{transport}-{family.replace('IP','')}-{protocol}"
         def enabled(label):
             ident=next(k for k,v in LABELS.items() if v==label)
-            return server.get('protocols',{}).get(ident,{}).get('enabled',True)
+            configured=server.get('protocols',{})
+            return not configured or configured.get(ident,{}).get('enabled',False)
         families=[family for family,key in [('IPv4','ipv4'),('IPv6','ipv6')] if server[key]]
         names += [node_name(protocol,family) for protocol in ('VLESS-REALITY-Vision','Hysteria2') if enabled(protocol) for family in families]
         if server['domains']['cf'] and enabled('CF入口-VMess-WS-TLS'): names.append(server['name']+'-T-CF入口-VMess-WS-TLS')

@@ -6,11 +6,18 @@ import re
 IDS=('reality','hy2','cf','anytls','shadowtls','salamander')
 LABELS={'reality':'VLESS-REALITY-Vision','hy2':'Hysteria2','cf':'CF入口-VMess-WS-TLS','anytls':'AnyTLS','shadowtls':'SS2022-ShadowTLS-v3','salamander':'Hysteria2-Salamander'}
 FIELDS={'enabled','port','sni','certificate','cover_host','cover_port','listen','padding_scheme','ws_path','alpn','client'}
+CLIENT_FIELDS={'idle-session-check-interval','idle-session-timeout','fast-open','client-fingerprint','udp-over-tcp','udp-over-tcp-version'}
+COMMON={'enabled','port','listen','client'}
+EXTRA={'reality':{'sni','cover_host','cover_port'},'hy2':{'sni','certificate','alpn'},
+       'cf':{'sni','ws_path'},'anytls':{'sni','certificate','alpn','padding_scheme'},
+       'shadowtls':{'cover_host','cover_port'},'salamander':{'sni','certificate','alpn'}}
 
-def validate_settings(settings):
+def validate_settings(settings,complete=False):
     if not isinstance(settings,dict) or set(settings)-set(IDS):raise ValueError('未知协议标识')
     for ident,p in settings.items():
         if not isinstance(p,dict) or set(p)-FIELDS:raise ValueError('未知协议参数: '+ident)
+        if set(p)-(COMMON|EXTRA[ident]):raise ValueError('该协议不支持参数: '+ident)
+        if complete and (COMMON|EXTRA[ident])-set(p):raise ValueError('缺少显式协议参数: '+ident)
         for k in ('port','cover_port'):
             if k in p and (type(p[k]) is not int or not 1<=p[k]<=65535):raise ValueError('端口无效: '+ident)
         if 'enabled' in p and type(p['enabled']) is not bool:raise ValueError('enabled 必须为布尔值')
@@ -24,12 +31,11 @@ def validate_settings(settings):
         if 'padding_scheme' in p and (ident!='anytls' or not isinstance(p['padding_scheme'],list) or any(not isinstance(x,str) for x in p['padding_scheme'])):raise ValueError('padding_scheme 无效')
         if 'alpn' in p and (not isinstance(p['alpn'],list) or any(not isinstance(x,str) or not x for x in p['alpn'])):raise ValueError('ALPN 无效')
         if 'client' in p:
-            allowed={'idle-session-check-interval','idle-session-timeout','fast-open','client-fingerprint','udp-over-tcp','udp-over-tcp-version'}
-            if not isinstance(p['client'],dict) or set(p['client'])-allowed:raise ValueError('客户端参数无效')
+            if not isinstance(p['client'],dict) or set(p['client'])-CLIENT_FIELDS:raise ValueError('客户端参数无效')
             for key,value in p['client'].items():
                 if key in ('fast-open','udp-over-tcp') and type(value) is not bool:raise ValueError('客户端开关必须为布尔值')
                 if key in ('idle-session-check-interval','idle-session-timeout') and (type(value) is not int or not 0<=value<=86400):raise ValueError('连接复用周期无效')
-                if key=='udp-over-tcp-version' and value not in (1,2):raise ValueError('UDP over TCP 版本无效')
+                if key=='udp-over-tcp-version' and (type(value) is not int or value not in (1,2)):raise ValueError('UDP over TCP 版本无效')
                 if key=='client-fingerprint' and (not isinstance(value,str) or not re.fullmatch(r'[a-zA-Z0-9_-]{1,32}',value)):raise ValueError('客户端 TLS 指纹无效')
 
 def classify(node):
@@ -83,7 +89,7 @@ def adopt(configs,clients,services):
     return state
 
 def render(configs,state,desired):
-    validate_settings(desired)
+    validate_settings(desired,complete=True)
     if set(desired)!=set(state['bindings']):raise ValueError('必须显式配置所有已登记协议')
     result=copy.deepcopy(configs);listeners=set()
     for ident,b in state['bindings'].items():
@@ -138,12 +144,14 @@ def export(configs,state):
         p=state['protocols'][ident]
         if not p['enabled']:continue
         b=state['bindings'][ident];n=entry(configs[b['path']],b);node=copy.deepcopy(template)
+        for key in CLIENT_FIELDS:node.pop(key,None)
         node.update(p.get('client',{}));node['port']=p['port']
         if ident=='reality':
             r=n['streamSettings']['realitySettings'];node.update(uuid=n['settings']['clients'][0]['id'],servername=r['serverNames'][0]);node['reality-opts']['short-id']=node['reality-opts']['short-id'] if str(node['reality-opts']['short-id']) in r['shortIds'] else r['shortIds'][0]
         elif ident=='hy2':node.update(password=n['settings']['clients'][0]['auth'],sni=p['sni'],alpn=p['alpn'])
         elif ident in ('anytls','salamander'):
             node.update(password=n['users'][0]['password'],sni=p['sni'])
+            node.pop('alpn',None)
             if p.get('alpn'):node['alpn']=p['alpn']
             if ident=='salamander':node['obfs-password']=n['obfs']['password']
         elif ident=='shadowtls':

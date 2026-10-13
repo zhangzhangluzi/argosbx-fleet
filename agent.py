@@ -34,6 +34,7 @@ def validate_native(state,values):
             cmd([BIN[core]]+(['run','-test'] if core=='xray' else ['check'])+['-c',str(f)])
 
 def plan(desired):
+    if JOURNAL.exists():raise ValueError('有未完成事务，请先 recover；未覆盖原计划')
     state=load();before=configs(state)
     for path,wanted in state['native_sha256'].items():
         if sha(Path(path).read_text())!=wanted:raise ValueError('服务配置已被外部修改，需要重新核对并 adopt')
@@ -53,17 +54,31 @@ def plan(desired):
     save(PLAN,{'state_before':state,'state_after':updated,'files':files,'services':services})
     return {'changed_files':len(files),'restart_required':services,'subscription_only':not files and updated!=state}
 
-def restore():
+def restore(allow_restart=False):
     if not JOURNAL.exists():return {'recovery':'nothing'}
     j=json.loads(JOURNAL.read_text());fail=[]
+    if j.get('restarts_attempted') and not allow_restart:
+        raise ValueError('恢复需要重启协议服务；保护现有连接，请在维护窗口指定 --allow-restart')
+    # Check every resource before restoring any, so a conflict cannot leave a
+    # partially reverted configuration beside still-running newer processes.
     for item in reversed(j['files']):
         p=Path(item['path']);current=p.read_text()
-        if current==item['after']:atomic(p,item['before'])
-        elif current!=item['before']:fail.append(item['path'])
+        if current not in (item['before'],item['after']):fail.append(item['path'])
+    if STATE.exists() and load() not in (j['state_before'],j.get('state_after',j['state_before'])):fail.append('server.json')
+    source=j.get('source')
+    if source and TARGET.exists() and TARGET.read_text() not in (source['before'],source['after']):fail.append('subscription source')
     if fail:raise RuntimeError('检测到第三方修改，保留恢复日志：'+','.join(fail))
+    for item in reversed(j['files']):
+        if Path(item['path']).read_text()==item['after']:atomic(item['path'],item['before'])
     save(STATE,j['state_before'])
     for service in j.get('restarts_attempted',[]):cmd(['systemctl','restart',service])
-    JOURNAL.unlink();return {'recovery':'restored'}
+    if source:
+        if source['before'] is None:TARGET.unlink(missing_ok=True)
+        else:write_source(source['before'],source['uid'],source['gid'],source['mode'])
+    else:
+        # Journals from v1.0.2 did not include the source snapshot.
+        export_source(_applying=True)
+    PLAN.unlink(missing_ok=True);JOURNAL.unlink();return {'recovery':'restored'}
 
 def apply(allow_restart=False):
     if JOURNAL.exists():raise ValueError('有未完成事务，请先 recover')
@@ -74,20 +89,28 @@ def apply(allow_restart=False):
         if sha(Path(path).read_text())!=h:raise ValueError('原生配置在 plan 后发生变化')
     for f in p['files']:
         if Path(f['path']).read_text()!=f['before']:raise ValueError('服务配置已改变')
+    updated=p['state_after']
+    # Persist the complete post-apply identity before changing files. Recovery
+    # must recognize a crash after saving STATE but before writing the source.
+    updated['native_sha256']={path:sha(next((f['after'] for f in p['files'] if f['path']==path),Path(path).read_text())) for path in state['native_sha256']}
+    source_stat=TARGET.stat() if TARGET.exists() else None
+    expected=configs(state)
+    for f in p['files']:expected[f['path']]=json.loads(f['after'])
+    p['source']={'before':TARGET.read_text() if source_stat else None,'after':yaml.safe_dump(export(expected,updated),allow_unicode=True,sort_keys=False),
+                 'uid':source_stat.st_uid if source_stat else 0,'gid':source_stat.st_gid if source_stat else 0,'mode':source_stat.st_mode&0o777 if source_stat else 0o640}
     p['restarts_attempted']=[];save(JOURNAL,p)
     try:
         for f in p['files']:atomic(f['path'],f['after'])
         for service in p['services']:
             p['restarts_attempted'].append(service);save(JOURNAL,p)
             cmd(['systemctl','restart',service]);cmd(['systemctl','is-active','--quiet',service])
-        updated=p['state_after'];updated['native_sha256']={path:sha(Path(path).read_text()) for path in updated['native_sha256']}
-        save(STATE,updated);export_source()
+        save(STATE,updated);export_source(_applying=True)
     except Exception:
-        restore();raise
+        restore(allow_restart=allow_restart);raise
     JOURNAL.unlink();PLAN.unlink();return {'applied':True,'restarted':p['services']}
 
-def export_source():
-    if JOURNAL.exists() and not PLAN.exists():raise ValueError('未完成事务')
+def export_source(_applying=False):
+    if JOURNAL.exists() and not _applying:raise ValueError('未完成事务，保留上一份订阅；请先 recover')
     state=load();current=configs(state)
     for path,h in state['native_sha256'].items():
         if sha(Path(path).read_text())!=h:raise ValueError('原生配置漂移，保留上一份可用订阅')
@@ -96,17 +119,20 @@ def export_source():
     value=export(current,state);body=yaml.safe_dump(value,allow_unicode=True,sort_keys=False)
     if TARGET.exists() and yaml.safe_load(TARGET.read_text())==value:return {'nodes':len(value['proxies']),'changed':False}
     group=cmd(['systemctl','show','caddy-sub','-p','Group','--value']).strip() or 'caddy-sub'
+    write_source(body,0,grp.getgrnam(group).gr_gid,0o640)
+    return {'nodes':len(value['proxies']),'changed':True}
+
+def write_source(body,uid,gid,mode):
     # Target remains readable by Caddy across an atomic replacement.
     with tempfile.NamedTemporaryFile(dir=TARGET.parent,prefix='.source-',delete=False) as f:
         temp=Path(f.name)
         try:
-            f.write(body.encode());f.flush();os.fsync(f.fileno());os.fchmod(f.fileno(),0o640);os.fchown(f.fileno(),0,grp.getgrnam(group).gr_gid)
+            f.write(body.encode());os.fchmod(f.fileno(),mode);os.fchown(f.fileno(),uid,gid);f.flush();os.fsync(f.fileno())
             os.replace(temp,TARGET)
             d=os.open(TARGET.parent,os.O_RDONLY)
             try:os.fsync(d)
             finally:os.close(d)
         finally:temp.unlink(missing_ok=True)
-    return {'nodes':len(value['proxies']),'changed':True}
 
 def initialize(payload):
     if STATE.exists():raise ValueError('已有登记，不能覆盖')
@@ -172,9 +198,11 @@ def main():
             s=load();r={k:s[k] for k in ['server_id','protocols','certificates','native_sha256']}
             r['native_configuration_matches']=all(sha(Path(p).read_text())==h for p,h in s['native_sha256'].items())
             r['services_active']=all(subprocess.run(['systemctl','is-active','--quiet',u]).returncode==0 for u in {b['service'] for ident,b in s['bindings'].items() if s['protocols'][ident]['enabled']})
+            r['unfinished_transactions']=[p.name for p in HOME.glob('*journal.json')]
+            r['source_matches']=TARGET.exists() and yaml.safe_load(TARGET.read_text())==export(configs(s),s) if r['native_configuration_matches'] else False
         elif a.command=='plan':r=plan(json.load(sys.stdin))
         elif a.command=='apply':r=apply(a.allow_restart)
-        elif a.command=='recover':r=restore()
+        elif a.command=='recover':r=restore(a.allow_restart)
         elif a.command=='certificate':r=certificate(json.load(sys.stdin)['hostname'])
         elif a.command=='certificate-recover':r=certificate_recover()
         else:r=export_source()

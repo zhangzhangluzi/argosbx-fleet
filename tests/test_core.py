@@ -123,7 +123,7 @@ class ReleaseTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             archive=release.package(Path(d)/'dist');digest=hashlib.sha256(Path(archive).read_bytes()).hexdigest();dest=Path(d)/'install'
             self.assertEqual(install.install(archive,digest,dest)['service_restarts'],0)
-            self.assertEqual(install.install(archive,digest,dest)['installed'],'v1.0.0')
+            self.assertEqual(install.install(archive,digest,dest)['installed'],json.loads((Path(__file__).resolve().parents[1]/'versions.json').read_text())['version'])
             self.assertTrue((dest/'current'/'agent.py').exists())
             with self.assertRaises(ValueError):install.install(archive,'0'*64,dest)
     def test_tar_path_traversal_is_rejected(self):
@@ -170,3 +170,16 @@ class NativeApplyTests(unittest.TestCase):
                 save(agent.JOURNAL,j)
                 with self.assertRaises(RuntimeError):agent.restore()
                 self.assertEqual(target.read_text(),'external');cmd.assert_not_called()
+
+class ShadowrocketRoutingTests(unittest.TestCase):
+    def test_direct_dns_and_domain_set_with_remote_final(self):
+        import importlib
+        with patch.object(fleet,'host_map',return_value={}):
+            sys.modules.pop('dns_policy',None);dns=importlib.import_module('dns_policy')
+        original=(Path(__file__).resolve().parents[1]/'templates/base-shadowrocket.conf').read_text()
+        result=dns.harden_shadowrocket(original)
+        self.assertIn('dns-server = https://223.6.6.6/dns-query\n',result)
+        self.assertNotIn('fallback-dns-server = system',result)
+        self.assertIn('DOMAIN-SET,https://raw.githubusercontent.com/blackmatrix7/',result)
+        self.assertLess(result.index('DOMAIN-SUFFIX,googleapis.cn'),result.index('DOMAIN-SET,'))
+        self.assertIn('FINAL,日常线路',result)

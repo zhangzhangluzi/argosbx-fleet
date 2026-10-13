@@ -1,1 +1,14 @@
-{"version":"v1.0.0","python_min":"3.10","dependencies":["PyYAML"],"validated_stable":{"xray":"26.3.27","sing-box":"1.14.3","cloudflared":"2026.10.0","sub-store":"2.42.3"},"updates_proxy_binaries":false}
+{
+  "version": "v1.0.1",
+  "python_min": "3.10",
+  "dependencies": [
+    "PyYAML"
+  ],
+  "validated_stable": {
+    "xray": "26.3.27",
+    "sing-box": "1.14.3",
+    "cloudflared": "2026.10.0",
+    "sub-store": "2.42.3"
+  },
+  "updates_proxy_binaries": false
+}

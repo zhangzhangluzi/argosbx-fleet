@@ -65,7 +65,7 @@ def harden_config(original, client):
 
 def harden_shadowrocket(original):
     remote = ', '.join(u + '#proxy' for u in REMOTE)
-    replacements = {'dns-server': remote, 'fallback-dns-server': remote,
+    replacements = {'dns-server': LOCAL_DOH, 'fallback-dns-server': LOCAL_DOH,
                     'proxy-dns-server': ', '.join(BOOTSTRAP), 'dns-direct-system': 'false',
                     'use-local-host-item-for-proxy': 'true'}
     result = original
@@ -73,6 +73,8 @@ def harden_shadowrocket(original):
         result, count = re.subn(r'^' + re.escape(key) + r'\s*=.*$', key + ' = ' + value, result, flags=re.M)
         assert count == 1, 'Unexpected Shadowrocket setting: ' + key
     result = re.sub(r'^GEOIP,CN,DIRECT$', 'GEOIP,CN,DIRECT,no-resolve', result, flags=re.M)
+    direct_set='DOMAIN-SET,https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Shadowrocket/ChinaMax/ChinaMax_Domain.list,DIRECT'
+    if direct_set not in result:result=result.replace('GEOIP,CN,DIRECT,no-resolve',direct_set+'\nGEOIP,CN,DIRECT,no-resolve')
     rule_start = result.index('[Rule]') + len('[Rule]')
     next_section = result.find('\n[', rule_start)
     rule_end = next_section if next_section >= 0 else len(result)

@@ -1,0 +1,124 @@
+mixed-port: 7890
+allow-lan: false
+bind-address: 127.0.0.1
+mode: rule
+log-level: warning
+ipv6: true
+tcp-concurrent: true
+dns:
+  enable: true
+  ipv6: false
+  enhanced-mode: fake-ip
+  fake-ip-range: 198.18.0.1/16
+  fake-ip-filter:
+  - '*.lan'
+  - '*.local'
+  - localhost
+  default-nameserver:
+  - 223.5.5.5
+  - 1.1.1.1
+  nameserver:
+  - https://1.1.1.1/dns-query#日常线路
+  - https://dns.google/dns-query#日常线路
+  direct-nameserver:
+  - 223.5.5.5
+  - 119.29.29.29
+  nameserver-policy: {}
+  proxy-server-nameserver:
+  - https://dns.alidns.com/dns-query#DIRECT
+  - https://doh.pub/dns-query#DIRECT
+rules:
+- DOMAIN-SUFFIX,googleapis.cn,日常线路
+- DOMAIN-SUFFIX,xn--ngstr-lra8j.com,日常线路
+- DOMAIN-SUFFIX,telegram.org,Telegram
+- DOMAIN-SUFFIX,t.me,Telegram
+- DOMAIN-SUFFIX,telegram.me,Telegram
+- DOMAIN-SUFFIX,telegra.ph,Telegram
+- DOMAIN-SUFFIX,telesco.pe,Telegram
+- IP-CIDR,91.108.56.0/22,Telegram,no-resolve
+- IP-CIDR,91.108.4.0/22,Telegram,no-resolve
+- IP-CIDR,91.108.8.0/22,Telegram,no-resolve
+- IP-CIDR,91.108.16.0/22,Telegram,no-resolve
+- IP-CIDR,91.108.12.0/22,Telegram,no-resolve
+- IP-CIDR,149.154.160.0/20,Telegram,no-resolve
+- IP-CIDR,91.105.192.0/23,Telegram,no-resolve
+- IP-CIDR,91.108.20.0/22,Telegram,no-resolve
+- IP-CIDR,185.76.151.0/24,Telegram,no-resolve
+- IP-CIDR6,2001:b28:f23d::/48,Telegram,no-resolve
+- IP-CIDR6,2001:b28:f23f::/48,Telegram,no-resolve
+- IP-CIDR6,2001:67c:4e8::/48,Telegram,no-resolve
+- IP-CIDR6,2001:b28:f23c::/48,Telegram,no-resolve
+- IP-CIDR6,2a0a:f280::/32,Telegram,no-resolve
+- RULE-SET,广告域名,去广告
+- IP-CIDR,127.0.0.0/8,DIRECT,no-resolve
+- IP-CIDR,10.0.0.0/8,DIRECT,no-resolve
+- IP-CIDR,172.16.0.0/12,DIRECT,no-resolve
+- IP-CIDR,192.168.0.0/16,DIRECT,no-resolve
+- IP-CIDR,169.254.0.0/16,DIRECT,no-resolve
+- IP-CIDR6,::1/128,DIRECT,no-resolve
+- IP-CIDR6,fc00::/7,DIRECT,no-resolve
+- IP-CIDR6,fe80::/10,DIRECT,no-resolve
+- DOMAIN-SUFFIX,local,DIRECT
+- DOMAIN-SUFFIX,lan,DIRECT
+- DOMAIN-SUFFIX,chatgpt.com,AI线路
+- DOMAIN-SUFFIX,openai.com,AI线路
+- DOMAIN-SUFFIX,oaistatic.com,AI线路
+- DOMAIN-SUFFIX,oaiusercontent.com,AI线路
+- DOMAIN-SUFFIX,claude.ai,AI线路
+- DOMAIN-SUFFIX,anthropic.com,AI线路
+- DOMAIN-SUFFIX,gemini.google.com,AI线路
+- DOMAIN-SUFFIX,aistudio.google.com,AI线路
+- DOMAIN-SUFFIX,generativelanguage.googleapis.com,AI线路
+- DOMAIN-SUFFIX,notebooklm.google.com,AI线路
+- DOMAIN-SUFFIX,cn,DIRECT
+- DOMAIN-SUFFIX,qq.com,DIRECT
+- DOMAIN-SUFFIX,baidu.com,DIRECT
+- DOMAIN-SUFFIX,taobao.com,DIRECT
+- DOMAIN-SUFFIX,tmall.com,DIRECT
+- DOMAIN-SUFFIX,jd.com,DIRECT
+- DOMAIN-SUFFIX,alipay.com,DIRECT
+- DOMAIN-SUFFIX,aliyun.com,DIRECT
+- DOMAIN-SUFFIX,bilibili.com,DIRECT
+- DOMAIN-SUFFIX,bilivideo.com,DIRECT
+- DOMAIN-SUFFIX,douyin.com,DIRECT
+- DOMAIN-SUFFIX,weibo.com,DIRECT
+- DOMAIN-SUFFIX,sina.com,DIRECT
+- DOMAIN-SUFFIX,163.com,DIRECT
+- DOMAIN-SUFFIX,126.com,DIRECT
+- DOMAIN-SUFFIX,xiaohongshu.com,DIRECT
+- RULE-SET,国内域名,DIRECT
+- RULE-SET,国内IP,DIRECT,no-resolve
+- NETWORK,UDP,UDP线路
+- MATCH,日常线路
+unified-delay: false
+profile:
+  store-selected: true
+  store-fake-ip: true
+rule-providers:
+  国内域名:
+    type: http
+    behavior: domain
+    format: mrs
+    url: https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/geosite/cn.mrs
+    path: ./rules/ti-cn-domain.mrs
+    interval: 86400
+    proxy: 日常线路
+    size-limit: 2097152
+  国内IP:
+    type: http
+    behavior: ipcidr
+    format: mrs
+    url: https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/geoip/cn.mrs
+    path: ./rules/ti-cn-ip.mrs
+    interval: 86400
+    proxy: 日常线路
+    size-limit: 1048576
+  广告域名:
+    type: http
+    behavior: domain
+    format: mrs
+    url: https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/geosite/category-ads-all.mrs
+    path: ./rules/ti-ads.mrs
+    interval: 86400
+    proxy: 日常线路
+    size-limit: 1048576

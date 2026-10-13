@@ -1,0 +1,35 @@
+{
+  "schema": 1,
+  "purpose_order": ["JP"],
+  "subscription": {
+    "backend_url": "https://sub.example.com/PRIVATE_BACKEND_PATH",
+    "public_url": "https://sub.example.com/s/PRIVATE_TOKEN?format=clash"
+  },
+  "servers": [
+    {
+      "id": "jp",
+      "name": "JP",
+      "country": "JP",
+      "country_name": "日本",
+      "ipv4": "192.0.2.10",
+      "ipv6": "2001:db8::10",
+      "domains": {
+        "ipv4": "jp4.example.com",
+        "ipv6": "jp6.example.com",
+        "cf": "edge-jp.example.com"
+      },
+      "ssh": {
+        "host": "192.0.2.10",
+        "port": 22,
+        "user": "root",
+        "known_hosts": "~/.ssh/known_hosts",
+        "identity_file": "~/.ssh/id_ed25519"
+      },
+      "subscription": {
+        "name": "argo-jp",
+        "url": "https://source.example.com/PRIVATE_TOKEN/clmi.yaml"
+      },
+      "salamander_ipv6": false
+    }
+  ]
+}

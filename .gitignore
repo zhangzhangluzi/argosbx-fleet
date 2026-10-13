@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.state/
+dist/
+servers.json
+*.pem
+*.key
+.env

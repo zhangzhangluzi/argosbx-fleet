@@ -72,6 +72,11 @@ def validate(data):
         check(s['subscription']['name'], r'[a-zA-Z0-9_-]{1,64}', 'subscription.name')
         url(s['subscription']['url'], 'subscription.url')
         if type(s['salamander_ipv6']) is not bool: raise ValueError('salamander_ipv6 必须为布尔值')
+        if 'onboarding' in s:
+            onboarding=s['onboarding']
+            if set(onboarding)!={'zone','certificate_host'}:raise ValueError('onboarding 需要 zone 和 certificate_host')
+            domain(onboarding['zone']);domain(onboarding['certificate_host'])
+            if not onboarding['certificate_host'].endswith('.'+onboarding['zone']):raise ValueError('证书域名不在所选 zone 下')
     for key in ('backend_url', 'public_url'):
         url(data['subscription'][key], key)
     if not isinstance(data['purpose_order'], list) or len(set(data['purpose_order'])) != len(data['purpose_order']):

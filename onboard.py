@@ -53,9 +53,8 @@ def install(config,ident):
     server=servers(config)[ident]
     if 'onboarding' not in server:raise ValueError('已有服务器未标记为新机；不会覆盖原生服务')
     # Detect occupied/managed hosts before uploading code or creating CF resources.
-    check='import os,json;from pathlib import Path;print(json.dumps({"root":os.geteuid()==0,"existing":Path("/root/agsbx").exists(),"resume":Path("/etc/argosbx-fleet/bootstrap.json").exists()}))'
-    status=json.loads(command(config,ident,['python3','-c',check]))
-    if not status['root'] or status['existing'] and not status['resume']:raise ValueError('仅允许 root 空白服务器或本安装器续装')
+    check='test "$(id -u)" = 0 && { test ! -e /root/agsbx || test -f /etc/argosbx-fleet/bootstrap.json; }'
+    command(config,ident,['sh','-c',check])
     upload_tools(config,ident)
     prefix=['python3','-B','/opt/argosbx-fleet/current/bootstrap.py']
     check=json.loads(command(config,ident,prefix+['preflight'],json.dumps({'server':server})))
@@ -71,7 +70,16 @@ def install(config,ident):
     else:raise RuntimeError('隧道尚未 healthy；未发布节点，修复后重试同一命令')
     import yaml
     try:
-        with urllib.request.urlopen(server['subscription']['url'],timeout=30) as r:source=yaml.safe_load(r.read())
+        # Use the verified inventory address while retaining hostname/SNI certificate validation.
+        # A local VPN DNS cache must not turn newly issued hostnames into a false failure.
+        import http.client,ssl
+        url=urlsplit(server['subscription']['url']);conn=http.client.HTTPSConnection(url.hostname,url.port or 443,timeout=30)
+        try:
+            conn.sock=ssl.create_default_context().wrap_socket(socket.create_connection((server['ipv4'] or server['ipv6'],url.port or 443),30),server_hostname=url.hostname)
+            conn.request('GET',url.path);response=conn.getresponse()
+            if response.status!=200:raise ValueError('source HTTP status')
+            source=yaml.safe_load(response.read())
+        finally:conn.close()
     except Exception:raise RuntimeError('外部 HTTPS 源订阅验收失败；检查云防火墙 TCP 8443，未发布节点') from None
     if len(source.get('proxies',[]))!=sum(p['enabled'] for p in server['protocols'].values()):raise ValueError('源节点数量不一致')
     import servers as publisher
@@ -92,8 +100,9 @@ def main():
     if a.server in servers(config):raise ValueError('服务器 ID 已存在')
     tunnels.discover(Cloudflare(config['cloudflare']['token_file']),a.zone)
     added=defaults(a.server,a.country,a.country_name,a.ipv4,a.ipv6,a.zone,a.ssh_key,a.known_hosts)
-    count=sum(s['country']==a.country for s in config['servers'])
-    if count:added['name']=a.country+str(count+1)
+    used={s['name'] for s in config['servers']};suffix=2
+    while added['name'] in used:
+        added['name']=a.country+str(suffix);suffix+=1
     config['servers'].append(added);config['schema']=3
     if a.country not in config['purpose_order']:config['purpose_order'].append(a.country)
     from fleet import validate

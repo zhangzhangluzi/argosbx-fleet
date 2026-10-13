@@ -35,7 +35,9 @@ def main():
             cf=Cloudflare(config['cloudflare']['token_file'])
             if cf_journal.exists():raise ValueError('CF 入站有未完成事务，先执行 protocol-recover')
             cf_plan=tunnels.change_plan(cf,server,previous)
-            if cf_plan:stage(cf,cf_plan,cf_journal)
+            if cf_plan:
+                cf_plan.update(protocols_before=previous,protocols_after=server['protocols'])
+                stage(cf,cf_plan,cf_journal)
         try:result=remote(config,a.server,'apply',allow_restart=a.allow_restart)
         except Exception:
             # Unknown SSH result: retain CF changes until native state is recovered.
@@ -49,8 +51,10 @@ def main():
             cf=Cloudflare(config['cloudflare']['token_file'])
             # If the native apply committed but its SSH reply was lost, keep the matching routes.
             current=remote(config,a.server,'inspect')['protocols']
-            if current==server['protocols']:cf_journal.unlink()
-            else:recover(cf,cf_journal)
+            saved=json.loads(cf_journal.read_text())['plan']
+            if current==saved['protocols_after']:cf_journal.unlink()
+            elif current==saved['protocols_before']:recover(cf,cf_journal)
+            else:raise ValueError('原生入站被其他操作修改，保留 CF 恢复日志')
     else:
         domain_plan=STATE/(a.server+'-domain-plan.json');journal=STATE/(a.server+'-domain-journal.json')
         cf=Cloudflare(config['cloudflare']['token_file'])

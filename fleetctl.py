@@ -22,8 +22,35 @@ def main():
     config=read(a.config);server=servers(config)[a.server]
     if a.command=='inspect':result=remote(config,a.server,'inspect')
     elif a.command=='protocol-plan':result=remote(config,a.server,'plan',{'protocols':server['protocols'],'certificates':server['certificates']})
-    elif a.command=='protocol-apply':result=remote(config,a.server,'apply',allow_restart=a.allow_restart)
-    elif a.command=='protocol-recover':result=remote(config,a.server,'recover',allow_restart=a.allow_restart)
+    elif a.command=='protocol-apply':
+        import tunnels
+        previous=remote(config,a.server,'inspect')['protocols']
+        checked=remote(config,a.server,'plan',{'protocols':server['protocols'],'certificates':server['certificates']})
+        if checked['restart_required'] and not a.allow_restart:raise ValueError('新入站需要原生服务重启；未修改服务或 Cloudflare，请在维护窗口使用 --allow-restart')
+        from protocols import protocol_type
+        old_cf={i:p for i,p in previous.items() if protocol_type(i,p)=='cf'}
+        new_cf={i:p for i,p in server['protocols'].items() if protocol_type(i,p)=='cf'}
+        cf=None;cf_journal=STATE/(a.server+'-protocol-cf.json')
+        if old_cf!=new_cf:
+            cf=Cloudflare(config['cloudflare']['token_file'])
+            if cf_journal.exists():raise ValueError('CF 入站有未完成事务，先执行 protocol-recover')
+            cf_plan=tunnels.change_plan(cf,server,previous)
+            if cf_plan:stage(cf,cf_plan,cf_journal)
+        try:result=remote(config,a.server,'apply',allow_restart=a.allow_restart)
+        except Exception:
+            # Unknown SSH result: retain CF changes until native state is recovered.
+            raise RuntimeError('应用结果未确认；保留 CF/原生恢复日志，请执行 protocol-recover') from None
+        cf_journal.unlink(missing_ok=True)
+        result['cf_synchronized']=old_cf!=new_cf
+    elif a.command=='protocol-recover':
+        cf_journal=STATE/(a.server+'-protocol-cf.json')
+        result=remote(config,a.server,'recover',allow_restart=a.allow_restart)
+        if cf_journal.exists():
+            cf=Cloudflare(config['cloudflare']['token_file'])
+            # If the native apply committed but its SSH reply was lost, keep the matching routes.
+            current=remote(config,a.server,'inspect')['protocols']
+            if current==server['protocols']:cf_journal.unlink()
+            else:recover(cf,cf_journal)
     else:
         domain_plan=STATE/(a.server+'-domain-plan.json');journal=STATE/(a.server+'-domain-journal.json')
         cf=Cloudflare(config['cloudflare']['token_file'])
@@ -48,12 +75,14 @@ def main():
             updated=copy.deepcopy(config);target=servers(updated)[a.server]
             for role,name in plan['names'].items():
                 if role!='certificate':target['domains'][role]=name
-            if target['domains']['cf'] and 'cf' in target['protocols']:target['protocols']['cf']['sni']=target['domains']['cf']
+            from protocols import protocol_type
+            for ident,p in target['protocols'].items():
+                if protocol_type(ident,p)=='cf' and target['domains']['cf']:p['sni']=target['domains']['cf']
             # Certificate switches use one explicit reference across TLS protocols.
             if j.get('certificate'):
                 target['certificates']['domain']=j['certificate']['certificate']
-                for ident in ('hy2','anytls','salamander'):
-                    if ident in target['protocols']:target['protocols'][ident].update(certificate='domain',sni=plan['names']['certificate'])
+                for ident,p in target['protocols'].items():
+                    if protocol_type(ident,p) in ('hy2','anytls','salamander'):p.update(certificate='domain',sni=plan['names']['certificate'])
             import socket,ipaddress
             # Confirm DNS before touching protocol identities or subscription objects.
             for role in ('ipv4','ipv6'):

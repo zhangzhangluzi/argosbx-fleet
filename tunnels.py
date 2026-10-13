@@ -73,3 +73,33 @@ def remove_owned(cf,journal):
         if j['tunnel_id'] and t['id']!=j['tunnel_id']:raise ValueError('隧道身份变化，拒绝删除')
         cf.call(base+'/'+t['id'],method='DELETE')
     journal.unlink()
+
+def change_plan(cf,server,previous):
+    """Synchronize this server's registered WS routes, preserving unrelated ingress."""
+    def selected(settings):return {i:p for i,p in settings.items() if protocol_type(i,p)=='cf' and p['enabled']}
+    old,new=selected(previous),selected(server['protocols'])
+    if old==new:return None
+    hosts={p['sni'] for p in old.values()}|{p['sni'] for p in new.values()}
+    if server['domains'].get('cf'):hosts.add(server['domains']['cf'])
+    zones=[z for z in cf.zones() if z.get('status')=='active' and all(h.endswith('.'+z['name']) for h in hosts)]
+    if len(zones)!=1:raise ValueError('CF 入站域名必须属于同一个授权 zone')
+    z=zones[0];dns='/zones/'+z['id']+'/dns_records';records={}
+    for host in hosts:records[host]=cf.call(dns+'?'+urlencode({'name':host}))['result']
+    tunnel_ids={r['content'].removesuffix('.cfargotunnel.com') for rows in records.values() for r in rows if r['type']=='CNAME' and r['content'].endswith('.cfargotunnel.com')}
+    if len(tunnel_ids)!=1:raise ValueError('不能确定本机固定隧道；先完成 onboard.py install')
+    tid=tunnel_ids.pop();endpoint='/accounts/'+z['account']['id']+'/cfd_tunnel/'+tid+'/configurations'
+    before=cf.call(endpoint)['result']['config'];after=copy.deepcopy(before)
+    old_rows=routes({'protocols':old})[:-1];new_rows=routes({'protocols':new})[:-1]
+    def owned(row):
+        return any(row.get('hostname')==o['hostname'] and row.get('service')==o['service'] and row.get('path') in (None,o['path']) for o in old_rows)
+    retained=[row for row in before['ingress'] if not owned(row)]
+    for row in retained:
+        if any(row.get('hostname')==n['hostname'] and row.get('path') in (None,n['path']) for n in new_rows):raise ValueError('CF 新路由与未托管入口冲突')
+    after['ingress']=new_rows+retained
+    changes=[]
+    for host in {p['sni'] for p in new.values()}:
+        wanted={'name':host,'type':'CNAME','content':tid+'.cfargotunnel.com','proxied':True,'ttl':1}
+        existing=records[host]
+        if any(not all(r.get(k)==wanted[k] for k in ('name','type','content','proxied')) for r in existing):raise ValueError('CF 域名记录冲突')
+        if not existing:changes.append(wanted)
+    return {'dns_path':dns,'records':changes,'tunnel_path':endpoint,'before':before,'after':after,'server_id':server['id'],'names':{}}

@@ -13,7 +13,7 @@ NATIVE=Path('/root/agsbx')
 
 def run(args,timeout=180):
     p=subprocess.run(args,text=True,capture_output=True,timeout=timeout)
-    if p.returncode:raise RuntimeError('初始化命令失败：'+args[0]+' '+(args[1] if len(args)>1 else '')+'；详见服务器对应服务日志')
+    if p.returncode:raise RuntimeError('初始化命令失败：'+' '.join(args[:4])+'；详见服务器对应服务日志')
     return p.stdout.strip()
 
 def ports(server):

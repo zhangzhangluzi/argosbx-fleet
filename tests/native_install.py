@@ -14,7 +14,10 @@ with open('/etc/hosts','a') as f:f.write('\n127.0.0.1 cover.example.com\n')
 # CI tunnel process has no production account; real CF API/connector is independently verified.
 original_unit=bootstrap.unit
 def unit(name,command,*args):return original_unit(name,'/usr/bin/sleep infinity' if name=='argo' else command,*args)
-with patch.object(bootstrap,'unit',unit):result=bootstrap.install(server,'ci-fixture-only',test_certificate=True)
+try:
+ with patch.object(bootstrap,'unit',unit):result=bootstrap.install(server,'ci-fixture-only',test_certificate=True)
+except Exception:
+ print(subprocess.getoutput('journalctl -u xr -u sb -u argo -u caddy-sub --no-pager -n 60'));raise
 assert result['installed']
 state=agent.load();before={p:Path(p).read_bytes() for p in state['native_sha256']}
 with patch.object(bootstrap,'unit',unit):bootstrap.install(server,'ci-fixture-only',test_certificate=True)

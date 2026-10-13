@@ -77,11 +77,18 @@ def probe_udp(port):
  with stream,socket.socket(socket.AF_INET,socket.SOCK_DGRAM) as sock:
   sock.settimeout(10);data=b'\x00\x00\x00\x01'+socket.inet_aton('127.0.0.1')+struct.pack('!H',25891)+b'fleet-udp'
   sock.sendto(data,relay);got,_=sock.recvfrom(4096);return got.endswith(b'fleet-udp')
+def checked(fn):
+ def run(port):
+  try:return fn(port)
+  except Exception:
+   import traceback
+   traceback.print_exc();raise
+ return run
 for n in nodes:
  n=copy.deepcopy(n);ident=n['name'][6:];n['server']='127.0.0.1';n['_certificate_path']=server['certificates']['domain']['certificate_file']
  if ident=='cf':n['tls']=False;n['port']=server['protocols']['cf']['port']
  if ident=='shadowtls':n['plugin-opts']['host']='ci.example.com'
- result=probe.check_case({'name':ident,'node':n,'expected_ips':['127.0.0.1']},https_check=probe_https,udp_check=probe_udp)
+ result=probe.check_case({'name':ident,'node':n,'expected_ips':['127.0.0.1']},https_check=checked(probe_https),udp_check=checked(probe_udp))
  assert all(result[k] for k in ('https_ok','exit_ok','udp_ok')),result
  print('PASS onboarding HTTPS/UDP probe',ident,flush=True)
 echo.close()

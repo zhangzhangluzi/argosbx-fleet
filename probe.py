@@ -90,7 +90,8 @@ def check_case(case,binary='/root/agsbx/sing-box',https_check=https,udp_check=ud
                 for attempt in range(2):
                     try:
                         address=https_check(port)
-                        result.update(https_ok=True,exit_ok=address in case['expected_ips'],udp_ok=udp_check(port))
+                        result.update(https_ok=True,exit_ok=address in case['expected_ips'])
+                        result['udp_ok']=udp_check(port)
                         if all(result[k] for k in ('https_ok','exit_ok','udp_ok')):break
                     except Exception:pass
                 return result

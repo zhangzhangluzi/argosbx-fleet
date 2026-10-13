@@ -36,7 +36,7 @@ def recover(path,config,get,request,digest):
     if failures:raise RuntimeError('恢复前发现冲突，尚未修改任何对象：'+','.join(failures))
     for item in pending:
         try:
-            request(config,'/api/'+item['kind']+'/'+item['name'],item['before'],'PATCH')
+            request(config,'/api/'+item['kind']+'/'+item['name'],item['before'],'DELETE' if item['before'] is None else 'PATCH')
             if get(config,item['kind'],item['name'])!=item['before']:raise ValueError('恢复回读不一致')
         except Exception:failures.append(item['kind']+'/'+item['name'])
     if failures:raise RuntimeError('保留日志，以下对象需恢复核对：'+','.join(failures))

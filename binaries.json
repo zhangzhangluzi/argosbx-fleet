@@ -1,0 +1,42 @@
+{
+  "xray": {
+    "amd64": {
+      "url": "https://github.com/XTLS/Xray-core/releases/download/v26.3.27/Xray-linux-64.zip",
+      "sha256": "23cd9af937744d97776ee35ecad4972cf4b2109d1e0fe6be9930467608f7c8ae"
+    },
+    "arm64": {
+      "url": "https://github.com/XTLS/Xray-core/releases/download/v26.3.27/Xray-linux-arm64-v8a.zip",
+      "sha256": "4d30283ae614e3057f730f67cd088a42be6fdf91f8639d82cb69e48cde80413c"
+    }
+  },
+  "sing-box": {
+    "amd64": {
+      "url": "https://github.com/SagerNet/sing-box/releases/download/v1.14.3/sing-box-1.14.3-linux-amd64.tar.gz",
+      "sha256": "e2bdf179c15a3652955dc44867e33ca0965c9c9b91b34267dcc5a5d639a5feee"
+    },
+    "arm64": {
+      "url": "https://github.com/SagerNet/sing-box/releases/download/v1.14.3/sing-box-1.14.3-linux-arm64.tar.gz",
+      "sha256": "29dae24d76bea3bc62d07dd3e60cfc12003de7debbd6b768df9be9c68360174e"
+    }
+  },
+  "cloudflared": {
+    "amd64": {
+      "url": "https://github.com/cloudflare/cloudflared/releases/download/2026.10.0/cloudflared-linux-amd64",
+      "sha256": "d33ff2d14475178d2012c2c56beba87389ac5ded27649519f198a7d3134a99db"
+    },
+    "arm64": {
+      "url": "https://github.com/cloudflare/cloudflared/releases/download/2026.10.0/cloudflared-linux-arm64",
+      "sha256": "e6422b9d4f72d3194bc5a38676f13667c06666523217b842a877d72a80b5ac08"
+    }
+  },
+  "caddy": {
+    "amd64": {
+      "url": "https://github.com/caddyserver/caddy/releases/download/v2.11.7/caddy_2.11.7_linux_amd64.tar.gz",
+      "sha256": "727b91701a392de6ebc5027509f548bf39979e5216340d0faed8fa5e69c84f8b"
+    },
+    "arm64": {
+      "url": "https://github.com/caddyserver/caddy/releases/download/v2.11.7/caddy_2.11.7_linux_arm64.tar.gz",
+      "sha256": "d8fc6d179a5d283028a472a5618564f6ad8a86fed513e64f032b3b0b7cc45e42"
+    }
+  }
+}

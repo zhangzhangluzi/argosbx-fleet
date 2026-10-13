@@ -3,7 +3,7 @@ import json,pathlib,re,yaml,sys
 
 from fleet import read, region_spec, host_map
 from storage import save
-from protocols import LABELS
+from protocols import LABELS, IDS, node_label, protocol_type
 from dns_policy import harden_config, harden_shadowrocket
 root=pathlib.Path(__file__).parent
 inventory=globals().get('inventory_override') or read()
@@ -50,7 +50,7 @@ for fmt in ('clash','stash'):
  return input;
 }'''.replace('COUNTRY_PREFIXES',json.dumps(country_prefixes,ensure_ascii=False)).replace('PURPOSE_GROUPS',json.dumps(purpose_groups,ensure_ascii=False)).replace('BASE',json.dumps(base,ensure_ascii=False)).replace('HEALTHCHECK',json.dumps(health,ensure_ascii=False)).replace('CONVERSION',"ProxyUtils.produce(ProxyUtils.parse(ProxyUtils.yaml.safeDump(source)), 'Stash', 'internal')" if fmt=='stash' else 'source.proxies')
     if fmt == 'clash':
-        script = (root/'ech-policy.js').read_text().replace('CF_HOSTS',json.dumps([s['domains']['cf'] for s in specs.values() if s['domains']['cf']])) + '\n' + script.replace('const proxies=source.proxies;', 'const proxies=applyCfEch(source.proxies);')
+        script = (root/'ech-policy.js').read_text().replace('CF_HOSTS',json.dumps(list(dict.fromkeys([s['domains']['cf'] for s in specs.values() if s['domains']['cf']]+[p['sni'] for s in specs.values() for i,p in s.get('protocols',{}).items() if protocol_type(i,p)=='cf' and p['enabled']])))) + '\n' + script.replace('const proxies=source.proxies;', 'const proxies=applyCfEch(source.proxies);')
     files.append({'name':fmt,'displayName':'ArgoSBX · '+fmt,'type':'mihomoConfig','sourceType':'collection','sourceName':'all','process':[{'type':'Script Operator','args':{'mode':'script','content':script}}]})
 # Shadowrocket configuration keeps the accepted DNS, Play and Telegram rules.
 sr=harden_shadowrocket((root/'templates'/'base-shadowrocket.conf').read_text(),hosts=node_hosts)
@@ -62,14 +62,16 @@ for code,label in countries.items():
         def node_name(protocol,family):
             transport='U' if protocol.startswith('Hysteria2') else 'T'
             return f"{server['name']}-{transport}-{family.replace('IP','')}-{protocol}"
-        def enabled(label):
-            ident=next(k for k,v in LABELS.items() if v==label)
-            configured=server.get('protocols',{})
-            return not configured or configured.get(ident,{}).get('enabled',False)
+        configured=server.get('protocols',{}) or {k:{'enabled':True} for k in IDS}
         families=[family for family,key in [('IPv4','ipv4'),('IPv6','ipv6')] if server[key]]
-        names += [node_name(protocol,family) for protocol in ('VLESS-REALITY-Vision','Hysteria2') if enabled(protocol) for family in families]
-        if server['domains']['cf'] and enabled('CF入口-VMess-WS-TLS'): names.append(server['name']+'-T-CF入口-VMess-WS-TLS')
-        names += [node_name(protocol,family) for protocol in ('AnyTLS','SS2022-ShadowTLS-v3','Hysteria2-Salamander') if enabled(protocol) for family in families if family!='IPv6' or protocol!='Hysteria2-Salamander' or server['salamander_ipv6']]
+        for ident,p in sorted(configured.items(),key=lambda pair:IDS.index(protocol_type(*pair))):
+            kind=protocol_type(ident,p)
+            if not p.get('enabled'):continue
+            label_name=node_label(ident,p)
+            if kind=='cf':
+                if p.get('sni') or server['domains']['cf']:names.append(server['name']+'-T-'+label_name)
+            else:
+                names += [node_name(label_name,family) for family in families if family!='IPv6' or kind!='salamander' or server['salamander_ipv6']]
     groups.append('地区-'+label+' = url-test, '+', '.join(names)+f", url=https://www.gstatic.com/generate_204, interval={inventory.get('health',{}).get('interval',900)}, timeout=5, tolerance=50")
 sr=sr[:start]+'\n'.join(groups)+'\n'+sr[end:]
 sr=sr.replace('PROTOCOL,UDP,UDP线路', 'PROTOCOL,UDP,日常线路')

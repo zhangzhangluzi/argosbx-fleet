@@ -6,19 +6,22 @@ function operator(proxies) {
     const desired=spec.protocols?.[id];
     if(!desired)return !Object.keys(spec.protocols||{}).length;
     if(!desired.enabled)return false;
-    if(id!=='cf' && p.port!==desired.port)throw new Error('Server port is not applied: '+id);
+    if((desired.type||id)!=='cf' && p.port!==desired.port)throw new Error('Server port is not applied: '+id);
     if(desired.sni && (p.sni||p.servername)!==desired.sni)throw new Error('Server SNI is not applied: '+id);
-    if(id==='cf' && String(p['ws-opts']?.path||'').replace(/^\//,'')!==String(desired.ws_path||'').replace(/^\//,''))throw new Error('Server WS path is not applied');
+    if((desired.type||id)==='cf' && String(p['ws-opts']?.path||'').replace(/^\//,'')!==String(desired.ws_path||'').replace(/^\//,''))throw new Error('Server WS path is not applied');
     return true;
   }
   for (const p of proxies) {
     if (p.type === 'vmess' && p.tls && p.network === 'ws') {
-      if (!spec.cf || !check(p,'cf')) continue;
+      const id=p.name?.startsWith('fleet.')?p.name.slice(6):'cf';
+      if (!check(p,id)) continue;
+      const host=spec.protocols?.[id]?.sni||spec.cf;
+      if(!host)continue;
       const n = JSON.parse(JSON.stringify(p));
-      n.server = spec.cf;
-      n.servername = spec.cf;
-      if (n['ws-opts']?.headers?.Host) n['ws-opts'].headers.Host = spec.cf;
-      result.push({...n, name:spec.name+'-T-CF入口-VMess-WS-TLS', 'skip-cert-verify':false});
+      n.server = host;
+      n.servername = host;
+      if (n['ws-opts']?.headers?.Host) n['ws-opts'].headers.Host = host;
+      result.push({...n, name:spec.name+'-T-CF入口-VMess-WS-TLS'+(id==='cf'?'':'@'+id), 'skip-cert-verify':false});
       continue;
     }
     let protocol;
@@ -27,7 +30,9 @@ function operator(proxies) {
     else if (p.type === 'anytls') protocol = 'AnyTLS';
     else if (p.type === 'ss' && p.cipher === '2022-blake3-aes-128-gcm' && p.plugin === 'shadow-tls' && Number(p['plugin-opts']?.version) === 3) protocol = 'SS2022-ShadowTLS-v3';
     else continue;
-    if(!check(p,ids[protocol]))continue;
+    const id=p.name?.startsWith('fleet.')?p.name.slice(6):ids[protocol];
+    if(!check(p,id))continue;
+    const suffix=id===ids[protocol]?'':'@'+id;
     for (const family of ['IPv4', 'IPv6']) {
       // The two IPv6 UDP 8443 paths fail the user's direct-network acceptance.
       if (protocol === 'Hysteria2-Salamander' && family === 'IPv6' && !spec.salamanderIPv6) continue;
@@ -35,7 +40,7 @@ function operator(proxies) {
       if (!domain) continue;
       const n = JSON.parse(JSON.stringify(p));
       n.server = domain;
-      n.name = spec.name+'-'+(p.type==='hysteria2'?'U':'T')+'-'+family.replace('IP','')+'-'+protocol;
+      n.name = spec.name+'-'+(p.type==='hysteria2'?'U':'T')+'-'+family.replace('IP','')+'-'+protocol+suffix;
       n.udp = true;
       n['skip-cert-verify'] = false;
       delete n.fingerprint;
@@ -46,7 +51,7 @@ function operator(proxies) {
   if (!result.length || new Set(result.map(p=>p.name)).size !== result.length) throw new Error('Invalid ArgoSBX node set');
   // Keep stable display order and the initial choice before automatic testing.
   const order = ['VLESS-REALITY-Vision','Hysteria2','CF入口-VMess-WS-TLS','AnyTLS','SS2022-ShadowTLS-v3','Hysteria2-Salamander'];
-  const rank = n => order.findIndex(p => n.endsWith('-'+p));
+  const rank = n => order.findIndex(p => n.split('@')[0].endsWith('-'+p));
   result.sort((a,b) => rank(a.name)-rank(b.name));
   return result;
 }

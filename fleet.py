@@ -19,8 +19,8 @@ def read(path=None):
 
 
 def validate(data):
-    if data.get('schema') not in (1,2) or not isinstance(data.get('servers'), list) or not data['servers']:
-        raise ValueError('需要 schema=1 和非空 servers')
+    if data.get('schema') not in (1,2,3) or not isinstance(data.get('servers'), list) or not data['servers']:
+        raise ValueError('需要 schema=1/2/3 和非空 servers')
     def check(value, pattern, label):
         if not isinstance(value, str) or not re.fullmatch(pattern, value):
             raise ValueError('无效字段：' + label)
@@ -82,8 +82,8 @@ def validate(data):
     from protocols import validate_settings
     for server in data['servers']:
         protocols=server.get('protocols',{})
-        validate_settings(protocols,complete=data['schema']==2)
-        if data['schema']==2 and (not protocols or not any(p['enabled'] for p in protocols.values())):
+        validate_settings(protocols,complete=data['schema']>=2)
+        if data['schema']>=2 and (not protocols or not any(p['enabled'] for p in protocols.values())):
             raise ValueError('每台已登记服务器至少保留一个启用协议；移除整机请从汇总配置中移除')
         certs=server.get('certificates',{})
         for p in protocols.values():

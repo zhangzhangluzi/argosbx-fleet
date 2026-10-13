@@ -13,6 +13,7 @@ import grp
 import yaml
 from protocols import adopt,export,render, classify
 from storage import save,atomic,lock
+from inbounds import reconcile,engines
 
 HOME=Path(os.environ.get('ARGOSBX_AGENT_HOME','/etc/argosbx-fleet'))
 STATE=HOME/'server.json'
@@ -23,7 +24,7 @@ BIN={'xray':'/root/agsbx/xray','sing-box':'/root/agsbx/sing-box'}
 
 def sha(s):return hashlib.sha256(s.encode()).hexdigest()
 def load():return json.loads(STATE.read_text())
-def configs(state):return {p:json.loads(Path(p).read_text()) for p in {b['path'] for b in state['bindings'].values()}}
+def configs(state):return {p:json.loads(Path(p).read_text()) for p in engines(state)}
 def cmd(args):return subprocess.run(args,capture_output=True,text=True,check=True,timeout=45).stdout
 
 def certificate_health(state):
@@ -46,7 +47,7 @@ def certificate_health(state):
 
 def validate_native(state,values):
     for path,c in values.items():
-        core=next(b['core'] for b in state['bindings'].values() if b['path']==path)
+        core=engines(state)[path]['core']
         with tempfile.TemporaryDirectory(prefix='argosbx-check-') as d:
             f=Path(d)/'config.json';save(f,c)
             cmd([BIN[core]]+(['run','-test'] if core=='xray' else ['check'])+['-c',str(f)])
@@ -58,13 +59,14 @@ def plan(desired):
         if sha(Path(path).read_text())!=wanted:raise ValueError('服务配置已被外部修改，需要重新核对并 adopt')
     updated=copy.deepcopy(state)
     if 'certificates' in desired:updated['certificates']=desired['certificates']
-    after=render(before,updated,desired['protocols']);validate_native(state,after)
+    candidate,updated,changes=reconcile(before,updated,desired['protocols'])
+    after=render(candidate,updated,desired['protocols']);validate_native(updated,after)
     updated['protocols']=desired['protocols']
     if any(not v['usable'] for v in certificate_health(updated).values()):raise ValueError('证书过期、SNI 不匹配或私钥不匹配，未创建计划')
     files=[{'path':p,'before':Path(p).read_text(),'after':json.dumps(c,ensure_ascii=False,indent=2)+'\n'} for p,c in after.items() if c!=before[p]]
-    services=sorted({b['service'] for b in state['bindings'].values() if b['path'] in {f['path'] for f in files}})
+    services=sorted({v['service'] for path,v in engines(updated).items() if path in {f['path'] for f in files}})
     save(PLAN,{'state_before':state,'state_after':updated,'files':files,'services':services})
-    return {'changed_files':len(files),'restart_required':services,'subscription_only':not files and updated!=state}
+    return {'changed_files':len(files),'restart_required':services,'subscription_only':not files and updated!=state,**changes}
 
 def restore(allow_restart=False):
     if not JOURNAL.exists():return {'recovery':'nothing'}

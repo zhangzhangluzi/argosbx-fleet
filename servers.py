@@ -52,6 +52,7 @@ def request(config, path, value=None, method=None, raw=False):
 
 
 def get(config, kind, name):
+    if name not in publication.temporary_names(config,kind,request):return None
     return request(config, '/api/'+('wholeFile' if kind=='file' else kind)+'/'+name)
 
 
@@ -85,8 +86,7 @@ def prepare(config):
     for key,kind in [('subscriptions','sub'),('collections','collection'),('files','file')]:
         for candidate in payload[key]:
             before=get(config,kind,candidate['name'])
-            if not before: raise ValueError('订阅对象不存在：请先完成新服务器安装及 Sub-Store 登记')
-            after=copy.deepcopy(before); after.update(candidate)
+            after=copy.deepcopy(before or {}); after.update(candidate)
             items.append({'kind':kind,'name':candidate['name'],'before':before,'after':after})
     plan={'inventory_sha256':digest(config),'servers':len(config['servers']),'items':items}
     # Validate in isolated native Sub-Store objects before changing production.
@@ -169,7 +169,7 @@ def publish(config):
             if item['before']==item['after']:continue
             if get(config,item['kind'],item['name'])!=item['before']:raise ValueError('检测到并发修改')
             attempted.append(item);save(JOURNAL,journal)
-            request(config,'/api/'+item['kind']+'/'+item['name'],item['after'],'PATCH')
+            request(config,'/api/'+({'sub':'subs','collection':'collections','file':'files'}[item['kind']] if item['before'] is None else item['kind']+'/'+item['name']),item['after'],'POST' if item['before'] is None else 'PATCH')
             if get(config,item['kind'],item['name'])!=item['after']:raise ValueError('发布回读不一致')
         import yaml
         for fmt in ['clash','stash']:

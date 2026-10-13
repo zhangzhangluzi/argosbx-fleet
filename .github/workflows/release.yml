@@ -23,6 +23,12 @@ jobs:
       - run: python -m pip install PyYAML==6.0.2
       - run: python -B -m unittest discover -s tests -v
       - run: python release.py dist
+      - name: Blank server and native protocol acceptance
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y python3-yaml
+          sudo python3 install.py dist/argosbx-fleet-v1.1.0.tar.gz --sha256 "$(cut -d' ' -f1 dist/SHA256SUMS)"
+          sudo python3 -B tests/native_install.py
   release:
     if: startsWith(github.ref, 'refs/tags/')
     needs: check

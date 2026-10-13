@@ -47,10 +47,17 @@ def build(cf,zone_name,server,names,tunnel_id):
     tunnel='/accounts/'+z['account']['id']+'/cfd_tunnel/'+tunnel_id+'/configurations'
     before=cf.call(tunnel)['result']['config'];after=copy.deepcopy(before)
     if names.get('cf'):
-        ingress=after.get('ingress',[]);service='http://127.0.0.1:'+str(server['protocols']['cf']['port'])
-        found=[r for r in ingress if r.get('hostname')==names['cf']]
-        if found and (len(found)!=1 or found[0].get('service')!=service):raise ValueError('已有隧道路由冲突')
-        if not found:ingress.insert(0,{'hostname':names['cf'],'service':service})
+        from protocols import protocol_type
+        enabled=[(i,p) for i,p in server['protocols'].items() if protocol_type(i,p)=='cf' and p.get('enabled',True)]
+        if not enabled:raise ValueError('没有启用的 CF 入站')
+        ingress=after.get('ingress',[])
+        for ident,p in enabled:
+            service='http://127.0.0.1:'+str(p['port'])
+            wanted={'hostname':names['cf'],'service':service}
+            if len(enabled)>1:wanted['path']='^'+re.escape('/'+p['ws_path'].lstrip('/'))+'$'
+            found=[r for r in ingress if r.get('hostname')==names['cf'] and r.get('path')==wanted.get('path')]
+            if found and (len(found)!=1 or found[0].get('service')!=service):raise ValueError('已有隧道路由冲突')
+            if not found:ingress.insert(0,wanted)
         after['ingress']=ingress
     return {'dns_path':dns,'records':records,'tunnel_path':tunnel,'before':before,'after':after,'server_id':server['id'],'names':names}
 

@@ -87,3 +87,32 @@ class CreatedSourceRecoveryTests(unittest.TestCase):
                 self.assertEqual(args[-1],'DELETE');state['current']=None
             publication.recover(path,config,lambda *a:state['current'],request,lambda x:x)
             self.assertIsNone(state['current']);self.assertFalse(path.exists())
+
+class ClientNamingTests(unittest.TestCase):
+    def test_two_same_protocol_ids_export_distinct_names(self):
+        import subprocess
+        from fleet import region_spec
+        from protocols import export
+        c,_,st=fixtures();desired=copy.deepcopy(st['protocols']);desired['anytls_second']={**desired['anytls'],'type':'anytls','port':25447}
+        c,st,_=reconcile(c,st,desired);raw=export(c,st)['proxies']
+        server=defaults('test','JP','日本','192.0.2.1',None,'example.com','/test/key','/test/known');server['protocols']=desired
+        script=(Path(__file__).resolve().parents[1]/'region-processor.js').read_text().replace('SPEC',json.dumps(region_spec(server)))
+        output=subprocess.check_output(['node','-e',script+';console.log(JSON.stringify(operator('+json.dumps(raw)+')));'],text=True)
+        names=[n['name'] for n in json.loads(output)]
+        self.assertIn('JP-T-v4-AnyTLS',names);self.assertIn('JP-T-v4-AnyTLS@anytls_second',names);self.assertEqual(len(names),4)
+    def test_xray_current_key_output(self):
+        from inbounds import x25519
+        from types import SimpleNamespace
+        with patch('inbounds.subprocess.run',return_value=SimpleNamespace(stdout='PrivateKey: fixture-private\nPassword (PublicKey): fixture-public\nHash32: ignore')):
+            self.assertEqual(x25519(),('fixture-private','fixture-public'))
+
+class CFRouteChangeTests(unittest.TestCase):
+    def test_additional_cf_route_preserves_unrelated(self):
+        cf=TunnelAPI();s=defaults('new','JP','日本','192.0.2.1',None,'example.com','/test/key','/test/known')
+        p=s['protocols']['cf'];cf.records=[{'name':p['sni'],'type':'CNAME','content':'00000000-0000-0000-0000-000000000001.cfargotunnel.com','proxied':True}]
+        cf.config={'ingress':[{'hostname':p['sni'],'service':'http://127.0.0.1:18082'},{'hostname':'unrelated.example.com','service':'http://127.0.0.1:9999'},{'service':'http_status:404'}]}
+        old=copy.deepcopy(s['protocols']);s['protocols']['cf_second']={**p,'type':'cf','port':18083,'ws_path':'/second'}
+        planned=tunnels.change_plan(cf,s,old)
+        self.assertEqual(len(planned['after']['ingress']),4)
+        self.assertEqual(planned['after']['ingress'][-2:],cf.config['ingress'][-2:])
+        self.assertEqual(planned['records'],[])

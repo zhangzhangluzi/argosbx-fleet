@@ -26,6 +26,11 @@ def validate_settings(settings):
         if 'client' in p:
             allowed={'idle-session-check-interval','idle-session-timeout','fast-open','client-fingerprint','udp-over-tcp','udp-over-tcp-version'}
             if not isinstance(p['client'],dict) or set(p['client'])-allowed:raise ValueError('客户端参数无效')
+            for key,value in p['client'].items():
+                if key in ('fast-open','udp-over-tcp') and type(value) is not bool:raise ValueError('客户端开关必须为布尔值')
+                if key in ('idle-session-check-interval','idle-session-timeout') and (type(value) is not int or not 0<=value<=86400):raise ValueError('连接复用周期无效')
+                if key=='udp-over-tcp-version' and value not in (1,2):raise ValueError('UDP over TCP 版本无效')
+                if key=='client-fingerprint' and (not isinstance(value,str) or not re.fullmatch(r'[a-zA-Z0-9_-]{1,32}',value)):raise ValueError('客户端 TLS 指纹无效')
 
 def classify(node):
     t=node.get('type')
@@ -114,6 +119,17 @@ def render(configs,state,desired):
         if ident=='shadowtls':n['handshake'].update(server=p['cover_host'],server_port=p['cover_port'])
         if ident=='cf':n['streamSettings']['wsSettings']['path']=p['ws_path']
         if ident=='anytls':n['padding_scheme']=p['padding_scheme']
+    # Include auxiliary/unmanaged inbounds (for example ShadowTLS's inner SS)
+    # when checking conflicts, rather than checking only published protocols.
+    occupied=set()
+    for config in result.values():
+        for inbound in config['inbounds']:
+            port=inbound.get('listen_port',inbound.get('port'))
+            if not port:continue
+            transport='udp' if inbound.get('type',inbound.get('protocol')) in ('hysteria','hysteria2','tuic') else 'tcp'
+            key=(transport,port)
+            if key in occupied:raise ValueError('与其他原生入站端口冲突')
+            occupied.add(key)
     return result
 
 def export(configs,state):

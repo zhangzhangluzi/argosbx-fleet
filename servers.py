@@ -124,6 +124,7 @@ def stage(config, payload):
 
 
 def check_profile(value):
+    if not isinstance(value,dict) or not all(k in value for k in ('proxies','proxy-groups','rules')):raise ValueError('Sub-Store 未生成完整配置，处理器可能报错')
     nodes=[n['name'] for n in value['proxies']]
     groups=value['proxy-groups'];group_names=[g['name'] for g in groups]
     if not nodes or len(set(nodes+group_names))!=len(nodes+group_names) or not value['rules']:

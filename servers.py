@@ -13,7 +13,7 @@ import sys
 import urllib.request
 
 sys.dont_write_bytecode = True
-from fleet import WORKSPACE, STATE, read
+from fleet import WORKSPACE, STATE, read, active_config
 
 WORK = Path(__file__).resolve().parent
 PLAN = STATE/'server-plan.json'
@@ -64,7 +64,7 @@ def summarize(plan):
 def native_preflight(config):
     from fleetctl import remote
     from concurrent.futures import ThreadPoolExecutor
-    configured=[s for s in config['servers'] if s.get('protocols')]
+    configured=[s for s in config['servers'] if s.get('status','active')=='active' and s.get('protocols')]
     def check(server):
         live=remote(config,server['id'],'inspect')
         if live['protocols']!=server['protocols'] or live['certificates']!=server['certificates']:
@@ -135,6 +135,14 @@ def stage(config, payload):
                 sr_names += [x.strip() for x in line.split('= url-test,',1)[1].split(',') if '=' not in x]
         if set(sr_names)!=set(expected):raise ValueError('Shadowrocket 分组与实际节点不一致')
         rendered['shadowrocket-config']=digest(sr)
+        for country in payload['collections'][1:]:
+            col=copy.deepcopy(country);col['name']=prefix+'-'+country['name'];col['process']=[]
+            col['subscriptions']=[aliases[n] for n in country['subscriptions']]
+            creating('collection',col['name']);request(config,'/api/collections',col,'POST')
+            value=yaml.safe_load(request(config,'/download/collection/'+col['name']+'?target=ClashMeta',raw=True))
+            nodes=value.get('proxies',[])
+            if not nodes or len({n['name'] for n in nodes})!=len(nodes):raise ValueError('国家订阅为空或节点重复')
+            rendered[country['name']]=digest(nodes)
     finally:
         publication.recover(STAGING,config,get,request,digest)
     return rendered
@@ -178,6 +186,10 @@ def publish(config):
             if digest(value)!=plan['rendered_sha256'][fmt]:raise ValueError('线上输出与已校验计划不符')
         if digest(request(config,'/api/file/shadowrocket-config',raw=True))!=plan['rendered_sha256']['shadowrocket-config']:
             raise ValueError('Shadowrocket 策略与已校验计划不符')
+        for name,wanted in plan['rendered_sha256'].items():
+            if not name.startswith('shadowrocket-') or name=='shadowrocket-config':continue
+            value=yaml.safe_load(request(config,'/download/collection/'+name+'?target=ClashMeta',raw=True))
+            if digest(value.get('proxies'))!=wanted:raise ValueError('国家订阅与已校验计划不符：'+name)
         public=config['subscription']['public_url']
         req=urllib.request.Request(public,headers={'User-Agent':'FlClash/0.8.99'})
         with urllib.request.urlopen(req,timeout=45) as r:value=yaml.safe_load(r.read())

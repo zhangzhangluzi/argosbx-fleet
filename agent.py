@@ -61,6 +61,8 @@ def plan(desired):
     if 'certificates' in desired:updated['certificates']=desired['certificates']
     candidate,updated,changes=reconcile(before,updated,desired['protocols'])
     after=render(candidate,updated,desired['protocols']);validate_native(updated,after)
+    from listeners import check
+    check(before,after)
     updated['protocols']=desired['protocols']
     if any(not v['usable'] for v in certificate_health(updated).values()):raise ValueError('证书过期、SNI 不匹配或私钥不匹配，未创建计划')
     files=[{'path':p,'before':Path(p).read_text(),'after':json.dumps(c,ensure_ascii=False,indent=2)+'\n'} for p,c in after.items() if c!=before[p]]
@@ -111,6 +113,10 @@ def apply(allow_restart=False):
         if sha(Path(path).read_text())!=h:raise ValueError('原生配置在 plan 后发生变化')
     for f in p['files']:
         if Path(f['path']).read_text()!=f['before']:raise ValueError('服务配置已改变')
+    from listeners import check
+    before=configs(state);after=copy.deepcopy(before)
+    for f in p['files']:after[f['path']]=json.loads(f['after'])
+    check(before,after)
     updated=p['state_after']
     # Persist the complete post-apply identity before changing files. Recovery
     # must recognize a crash after saving STATE but before writing the source.

@@ -77,17 +77,10 @@ def main():
             if not j['ready'] or config!=plan['inventory']:raise ValueError('迁移计划未就绪或已过期')
             if plan['names'].get('certificate') and not (j.get('certificate') or {}).get('ready'):
                 raise ValueError('证书阶段未完成，请先 domain-recover；未修改协议或订阅')
-            updated=copy.deepcopy(config);target=servers(updated)[a.server]
-            for role,name in plan['names'].items():
-                if role!='certificate':target['domains'][role]=name
-            from protocols import protocol_type
-            for ident,p in target['protocols'].items():
-                if protocol_type(ident,p)=='cf' and target['domains']['cf']:p['sni']=target['domains']['cf']
-            # Certificate switches use one explicit reference across TLS protocols.
-            if j.get('certificate'):
-                target['certificates']['domain']=j['certificate']['certificate']
-                for ident,p in target['protocols'].items():
-                    if protocol_type(ident,p) in ('hy2','anytls','salamander'):p.update(certificate='domain',sni=plan['names']['certificate'])
+            updated=copy.deepcopy(config)
+            from protocols import migrate_references
+            target=migrate_references(server,plan['names'],j['certificate']['certificate'] if j.get('certificate') else None)
+            updated['servers']=[target if s['id']==a.server else s for s in updated['servers']]
             import socket,ipaddress
             # Confirm DNS before touching protocol identities or subscription objects.
             for role in ('ipv4','ipv6'):

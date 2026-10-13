@@ -34,6 +34,7 @@ def validate(data):
         check(value, r'(?=.{1,253}$)(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,63}', '域名')
     ids, names, sources, domains, regions = set(), set(), set(), set(), {}
     for s in data['servers']:
+        if s.get('status','active') not in ('active','pending'):raise ValueError('服务器 status 仅支持 active / pending')
         check(s['id'], r'[a-z][a-z0-9_-]{0,31}', 'id')
         check(s['name'], r'[A-Z][A-Z0-9]{0,31}', 'name')
         check(s['country'], r'[A-Z]{2}', 'country')
@@ -103,8 +104,17 @@ def servers(data=None):
     return {s['id']: s for s in (data or read())['servers']}
 
 
+def active_config(data):
+    import copy
+    result=copy.deepcopy(data)
+    result['servers']=[s for s in result['servers'] if s.get('status','active')=='active']
+    countries={s['country'] for s in result['servers']}
+    result['purpose_order']=[c for c in result.get('purpose_order',[]) if c in countries]
+    if not result['servers']:raise ValueError('没有已验收启用的服务器')
+    return result
+
 def host_map(data=None):
-    return {s['domains'][f]: s[f] for s in (data or read())['servers'] for f in ('ipv4', 'ipv6') if s[f]}
+    return {s['domains'][f]: s[f] for s in active_config(data or read())['servers'] for f in ('ipv4', 'ipv6') if s[f]}
 
 
 def region_spec(server):

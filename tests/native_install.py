@@ -56,6 +56,35 @@ for node in nodes:
     print(Path('/tmp/fleet-ci-client.log').read_text());print(subprocess.getoutput('journalctl -u xr -u sb --no-pager -n 25'));raise AssertionError(ident+' client failed: '+response.stderr)
    print('PASS actual client',ident,flush=True)
   finally:proc.terminate();proc.wait(timeout=10)
+# Exercise the exact onboarding probe using a private HTTPS + UDP echo fixture.
+import probe,socket,struct
+echo=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);echo.bind(('127.0.0.1',25891))
+def echo_loop():
+ while True:
+  try:
+   data,addr=echo.recvfrom(4096);echo.sendto(data,addr)
+  except OSError:return
+threading.Thread(target=echo_loop,daemon=True).start()
+def probe_https(port):
+ raw,_=probe.socks(port,'127.0.0.1',25888)
+ context=ssl.create_default_context(cafile=server['certificates']['domain']['certificate_file'])
+ with raw,context.wrap_socket(raw,server_hostname='ci.example.com') as stream:
+  stream.sendall(b'GET / HTTP/1.1\r\nHost: ci.example.com\r\nConnection: close\r\n\r\n')
+  response=probe.http.client.HTTPResponse(stream);response.begin();assert response.read()==b'fleet-native-ok'
+ return '127.0.0.1'
+def probe_udp(port):
+ stream,relay=probe.socks(port,'0.0.0.0',0,True)
+ with stream,socket.socket(socket.AF_INET,socket.SOCK_DGRAM) as sock:
+  sock.settimeout(10);data=b'\x00\x00\x00\x01'+socket.inet_aton('127.0.0.1')+struct.pack('!H',25891)+b'fleet-udp'
+  sock.sendto(data,relay);got,_=sock.recvfrom(4096);return got.endswith(b'fleet-udp')
+for n in nodes:
+ n=copy.deepcopy(n);ident=n['name'][6:];n['server']='127.0.0.1';n['_certificate_path']=server['certificates']['domain']['certificate_file']
+ if ident=='cf':n['tls']=False;n['port']=server['protocols']['cf']['port']
+ if ident=='shadowtls':n['plugin-opts']['host']='ci.example.com'
+ result=probe.check_case({'name':ident,'node':n,'expected_ips':['127.0.0.1']},https_check=probe_https,udp_check=probe_udp)
+ assert all(result[k] for k in ('https_ok','exit_ok','udp_ok')),result
+ print('PASS onboarding HTTPS/UDP probe',ident,flush=True)
+echo.close()
 # Create/edit/delete a second same-type listener through installed agent interfaces.
 desired=copy.deepcopy(server['protocols']);desired['anytls_second']={**desired['anytls'],'type':'anytls','port':25447}
 assert agent.plan({'protocols':desired})['added']==['anytls_second']

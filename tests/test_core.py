@@ -135,6 +135,23 @@ class ReleaseTests(unittest.TestCase):
             with self.assertRaises(ValueError):install.install(path,hashlib.sha256(path.read_bytes()).hexdigest(),Path(d)/'install')
 
 class RoutingTests(unittest.TestCase):
+    def test_business_console_exceptions_precede_ad_block(self):
+        import importlib
+        sys.modules.pop('dns_policy',None);dns=importlib.import_module('dns_policy')
+        rules=dns.guarded_rules(['RULE-SET,广告域名,去广告','MATCH,日常线路'])
+        positions=[]
+        for host in dns.BUSINESS_CONSOLES:
+            rule='DOMAIN,'+host+',日常线路'
+            self.assertIn(rule,rules);positions.append(rules.index(rule))
+        self.assertLess(max(positions),rules.index('RULE-SET,广告域名,去广告'))
+
+    def test_business_console_exceptions_are_exact(self):
+        import importlib
+        sys.modules.pop('dns_policy',None);dns=importlib.import_module('dns_policy')
+        rules=dns.guarded_rules(['RULE-SET,广告域名,去广告'])
+        self.assertNotIn('DOMAIN-SUFFIX,applovin.com,日常线路',rules)
+        self.assertNotIn('DOMAIN-SUFFIX,tiktok.com,日常线路',rules)
+
     def test_domestic_dns_matches_routing_and_play_exception(self):
         import importlib,yaml
         with patch.object(fleet,'host_map',return_value={}):

@@ -1,12 +1,12 @@
 """Prepare native Sub-Store source processors and client configuration templates."""
 import json,pathlib,re,yaml,sys
 
-from fleet import read, region_spec, host_map
+from fleet import read, region_spec, host_map, active_config
 from storage import save
-from protocols import LABELS, IDS, node_label, protocol_type
+from protocols import LABELS, IDS, node_label, protocol_type, families as node_families
 from dns_policy import harden_config, harden_shadowrocket
 root=pathlib.Path(__file__).parent
-inventory=globals().get('inventory_override') or read()
+inventory=active_config(globals().get('inventory_override') or read())
 node_hosts=host_map(inventory)
 specs={s['id']:s for s in inventory['servers']}
 countries={s['country']:s['country_name'] for s in specs.values()}
@@ -71,15 +71,16 @@ for code,label in countries.items():
             if kind=='cf':
                 if p.get('sni') or server['domains']['cf']:names.append(server['name']+'-T-'+label_name)
             else:
-                names += [node_name(label_name,family) for family in families if family!='IPv6' or kind!='salamander' or server['salamander_ipv6']]
+                names += [node_name(label_name,{'ipv4':'IPv4','ipv6':'IPv6'}[f]) for f in node_families(ident,p,server)]
     groups.append('地区-'+label+' = url-test, '+', '.join(names)+f", url=https://www.gstatic.com/generate_204, interval={inventory.get('health',{}).get('interval',900)}, timeout=5, tolerance=50")
 sr=sr[:start]+'\n'.join(groups)+'\n'+sr[end:]
 sr=sr.replace('PROTOCOL,UDP,UDP线路', 'PROTOCOL,UDP,日常线路')
 files.append({'name':'shadowrocket-config','displayName':'Shadowrocket 自动策略','source':'local','content':sr,'process':[]})
 payload={'subscriptions':subscriptions,'collections':[{'name':'all','displayName':' · '.join(countries.values()),'subscriptions':[s['subscription']['name'] for s in specs.values()],'process':[]}],'files':files}
-export_processor={'type':'Response Transformer','customName':'FlClash 完整配置导出','args':{'mode':'script','content':(root/'flclash-response-transformer.js').read_text().replace('PROFILE_TITLES',json.dumps({'all':'ArgoSBX '+'-'.join(countries),**{s['subscription']['name']:'ArgoSBX '+s['name'] for s in specs.values()}},ensure_ascii=False)),'arguments':{'profile':'clash'}}}
+payload['collections'] += [{'name':'shadowrocket-'+code.lower(),'displayName':'ArgoSBX · '+label,'subscriptions':[s['subscription']['name'] for s in specs.values() if s['country']==code],'process':[]} for code,label in countries.items()]
+export_processor={'type':'Response Transformer','customName':'FlClash 完整配置导出','args':{'mode':'script','content':(root/'flclash-response-transformer.js').read_text().replace('PROFILE_TITLES',json.dumps({'all':'ArgoSBX '+'-'.join(countries),**{'shadowrocket-'+code.lower():'ArgoSBX · '+label for code,label in countries.items()},**{s['subscription']['name']:'ArgoSBX '+s['name'] for s in specs.values()}},ensure_ascii=False)),'arguments':{'profile':'clash'}}}
 for item in payload['subscriptions']+payload['collections']:
     item['process'].append(export_processor)
 from fleet import STATE
 p=STATE/'substore-payload.json';save(p,payload)
-print(json.dumps({'subscriptions':len(subscriptions),'collections':1,'files':len(files),'groups_per_yaml':len(countries)+6,'visible_groups_per_yaml':len(countries)+4}))
+print(json.dumps({'subscriptions':len(subscriptions),'collections':len(payload['collections']),'files':len(files),'groups_per_yaml':len(countries)+6,'visible_groups_per_yaml':len(countries)+4}))

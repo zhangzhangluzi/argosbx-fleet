@@ -30,7 +30,7 @@ def defaults(ident,country,label,ip,ip6,zone,key,known_hosts):
         else:p.update(sni=host,certificate='domain',alpn=['h3'] if kind in ('hy2','salamander') else ['h2','http/1.1'])
         if kind=='anytls':p.update(padding_scheme=[]);p['client'].update({'idle-session-check-interval':30,'idle-session-timeout':30})
         protocols[kind]=p
-    return {'id':ident,'name':country,'country':country,'country_name':label,'ipv4':ip,'ipv6':ip6,'domains':{'ipv4':ident+'4.'+zone,'ipv6':ident+'6.'+zone if ip6 else None,'cf':'edge-'+host},'ssh':{'host':ip,'port':22,'user':'root','known_hosts':str(Path(known_hosts).expanduser().resolve()),'identity_file':str(Path(key).expanduser().resolve())},'subscription':{'name':'argosbx-'+ident,'url':'https://'+host+':8443/source/'+secrets.token_urlsafe(32)},'salamander_ipv6':False,'certificates':{'domain':cert},'protocols':protocols,'onboarding':{'zone':zone,'certificate_host':host}}
+    return {'id':ident,'status':'pending','name':country,'country':country,'country_name':label,'ipv4':ip,'ipv6':ip6,'domains':{'ipv4':ident+'4.'+zone,'ipv6':ident+'6.'+zone if ip6 else None,'cf':'edge-'+host},'ssh':{'host':ip,'port':22,'user':'root','known_hosts':str(Path(known_hosts).expanduser().resolve()),'identity_file':str(Path(key).expanduser().resolve())},'subscription':{'name':'argosbx-'+ident,'url':'https://'+host+':8443/source/'+secrets.token_urlsafe(32)},'salamander_ipv6':False,'certificates':{'domain':cert},'protocols':protocols,'onboarding':{'zone':zone,'certificate_host':host}}
 
 def upload_tools(config,ident):
     import release
@@ -52,6 +52,7 @@ with tempfile.TemporaryDirectory(prefix='fleet-bootstrap-') as d:
 def install(config,ident):
     server=servers(config)[ident]
     if 'onboarding' not in server:raise ValueError('已有服务器未标记为新机；不会覆盖原生服务')
+    if server.get('status','active')!='pending':raise ValueError('服务器已启用，请使用协议管理命令')
     # Detect occupied/managed hosts before uploading code or creating CF resources.
     check='test "$(id -u)" = 0 && { test ! -e /root/agsbx || test -f /etc/argosbx-fleet/bootstrap.json; }'
     command(config,ident,['sh','-c',check])
@@ -82,10 +83,15 @@ def install(config,ident):
         finally:conn.close()
     except Exception:raise RuntimeError('外部 HTTPS 源订阅验收失败；检查云防火墙 TCP 8443，未发布节点') from None
     if len(source.get('proxies',[]))!=sum(p['enabled'] for p in server['protocols'].values()):raise ValueError('源节点数量不一致')
+    from acceptance import verify_new_server
+    result['protocol_acceptance']=verify_new_server(config,server,source['proxies'])
+    candidate=copy.deepcopy(config);servers(candidate)[ident]['status']='active'
     import servers as publisher
     from lease import coordinator
     with lock(STATE/'publisher.lock'),coordinator(config):
-        publisher.prepare(config);published=publisher.publish(config)
+        publisher.prepare(candidate);published=publisher.publish(candidate)
+    # The pending entry remains retryable after any unknown publication outcome.
+    save(Path(os.environ.get('ARGOSBX_SERVERS_FILE',DEFAULT)),candidate)
     result.update(tunnel_healthy=True,https_source_verified=True,publication=published)
     return result
 

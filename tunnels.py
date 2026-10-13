@@ -2,7 +2,7 @@
 import copy,json,re,secrets
 from urllib.parse import urlencode
 from storage import save
-from protocols import protocol_type
+from protocols import protocol_type,cf_origin,validate_settings
 from domains import build,stage,recover
 
 def discover(cf,zone):
@@ -11,6 +11,7 @@ def discover(cf,zone):
     return found[0]
 
 def routes(server):
+    validate_settings(server['protocols'])
     rows=[];seen=set()
     for ident,p in server['protocols'].items():
         if protocol_type(ident,p)!='cf' or not p['enabled']:continue
@@ -18,7 +19,7 @@ def routes(server):
         key=(p['sni'],path)
         if key in seen:raise ValueError('CF 域名和 WS 路径重复')
         seen.add(key)
-        rows.append({'hostname':p['sni'],'path':'^'+re.escape(path)+'$','service':'http://127.0.0.1:'+str(p['port'])})
+        rows.append({'hostname':p['sni'],'path':'^'+re.escape(path)+'$','service':cf_origin(p)})
     return rows+[{'service':'http_status:404'}]
 
 def provision(cf,server,zone,journal):
@@ -29,7 +30,10 @@ def provision(cf,server,zone,journal):
     else:
         z=discover(cf,zone)
         # Preflight names before allocating a remote resource.
-        for host in {v for v in server['domains'].values() if v}|{server['onboarding']['certificate_host']}:
+        hosts={v for v in server['domains'].values() if v}|{server['onboarding']['certificate_host']}
+        hosts|={p['sni'] for i,p in server['protocols'].items() if protocol_type(i,p)=='cf' and p['enabled']}
+        routes(server)
+        for host in hosts:
             if not host.endswith('.'+zone):raise ValueError('新机必须使用所选域名的子域名')
             records=cf.call('/zones/'+z['id']+'/dns_records?'+urlencode({'name':host}))['result']
             if records:raise ValueError('新机域名已被使用：'+host)

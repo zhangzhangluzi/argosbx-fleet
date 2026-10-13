@@ -37,6 +37,8 @@ def validate_settings(settings,complete=False):
         if 'listen' in p:
             ipaddress.ip_address(p['listen'])
             if kind=='cf' and not ipaddress.ip_address(p['listen']).is_loopback:raise ValueError('CF 源站只允许监听回环地址')
+        if 'listen' in p and kind!='cf' and (ipaddress.ip_address(p['listen']).is_loopback or ipaddress.ip_address(p['listen']).is_multicast):raise ValueError('公开直连入站不能只监听回环或组播地址')
+        if 'ws_path' in p and isinstance(p['ws_path'],str) and any(c in p['ws_path'] for c in ('?','#','%','\\',':')):raise ValueError('WS 路径必须为纯路径，不能包含查询参数、片段或编码分隔符')
         if 'ws_path' in p and (not isinstance(p['ws_path'],str) or not 1<=len(p['ws_path'])<=2048 or any(c.isspace() for c in p['ws_path'])):raise ValueError('WS 路径无效')
         if 'certificate' in p and not re.fullmatch(r'[a-zA-Z0-9_-]{1,64}',p['certificate']):raise ValueError('证书引用无效')
         if 'padding_scheme' in p and (kind!='anytls' or not isinstance(p['padding_scheme'],list) or any(not isinstance(x,str) for x in p['padding_scheme'])):raise ValueError('padding_scheme 无效')
@@ -48,6 +50,30 @@ def validate_settings(settings,complete=False):
                 if key in ('idle-session-check-interval','idle-session-timeout') and (type(value) is not int or not 0<=value<=86400):raise ValueError('连接复用周期无效')
                 if key=='udp-over-tcp-version' and (type(value) is not int or value not in (1,2)):raise ValueError('UDP over TCP 版本无效')
                 if key=='client-fingerprint' and (not isinstance(value,str) or not re.fullmatch(r'[a-zA-Z0-9_-]{1,32}',value)):raise ValueError('客户端 TLS 指纹无效')
+
+def families(ident,p,server):
+    kind=protocol_type(ident,p);listen=ipaddress.ip_address(p.get('listen','::'))
+    # Xray treats its unspecified address as dual-stack; sing-box binds the literal family.
+    both=listen.is_unspecified and (listen.version==6 or kind in ('reality','hy2'))
+    return [f for f in ('ipv4','ipv6') if server.get(f) and (both or listen.version==(4 if f=='ipv4' else 6)) and not (f=='ipv6' and kind=='salamander' and not server['salamander_ipv6'])]
+
+def cf_origin(p):
+    ip=ipaddress.ip_address(p['listen'])
+    if not ip.is_loopback:raise ValueError('CF 源站只允许回环地址')
+    return 'http://'+('['+str(ip)+']' if ip.version==6 else str(ip))+':'+str(p['port'])
+
+def migrate_references(server,names,certificate=None):
+    target=copy.deepcopy(server);old=server['domains'].get('cf')
+    for role,name in names.items():
+        if role!='certificate':target['domains'][role]=name
+    if names.get('cf'):
+        for ident,p in target['protocols'].items():
+            if protocol_type(ident,p)=='cf' and p['sni']==old:p['sni']=names['cf']
+    if certificate:
+        target['certificates']['domain']=certificate
+        for ident,p in target['protocols'].items():
+            if protocol_type(ident,p) in ('hy2','anytls','salamander'):p.update(certificate='domain',sni=names['certificate'])
+    return target
 
 def classify(node):
     t=node.get('type')

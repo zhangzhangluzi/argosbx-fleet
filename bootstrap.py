@@ -33,6 +33,14 @@ def preflight(server):
             with socket.socket(socket.AF_INET6,socket.SOCK_DGRAM if transport=='udp' else socket.SOCK_STREAM) as s:
                 try:s.bind(('::',port))
                 except OSError:raise ValueError('初始化端口已被占用：'+str(port)+'/'+transport) from None
+        from listeners import check
+        native={'inbounds':[]}
+        for ident,p in server['protocols'].items():
+            if not p['enabled']:continue
+            kind=protocol_type(ident,p)
+            if kind not in ('hy2','salamander') and p['port'] in (80,8443):raise ValueError('协议端口与 Caddy 冲突')
+            native['inbounds'].append({'type':'hysteria2' if kind in ('hy2','salamander') else kind,'listen':p['listen'],'listen_port':p['port']})
+        check({}, {'native':native})
     return {'blank_or_resumable':True,'required_ingress':[str(p)+'/'+t for t,p in ports(server)]}
 
 def binaries():

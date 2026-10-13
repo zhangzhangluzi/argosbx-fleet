@@ -36,6 +36,12 @@ function operator(proxies) {
     for (const family of ['IPv4', 'IPv6']) {
       // The two IPv6 UDP 8443 paths fail the user's direct-network acceptance.
       if (protocol === 'Hysteria2-Salamander' && family === 'IPv6' && !spec.salamanderIPv6) continue;
+      const binding=spec.protocols?.[id];
+      if(binding?.listen) {
+        const addr=binding.listen, kind=binding.type||id;
+        const both=addr==='::'||(addr==='0.0.0.0'&&['reality','hy2'].includes(kind));
+        if(!both && ((addr.includes(':')?'IPv6':'IPv4')!==family))continue;
+      }
       const domain = spec[family];
       if (!domain) continue;
       const n = JSON.parse(JSON.stringify(p));

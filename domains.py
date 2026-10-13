@@ -47,12 +47,12 @@ def build(cf,zone_name,server,names,tunnel_id):
     tunnel='/accounts/'+z['account']['id']+'/cfd_tunnel/'+tunnel_id+'/configurations'
     before=cf.call(tunnel)['result']['config'];after=copy.deepcopy(before)
     if names.get('cf'):
-        from protocols import protocol_type
-        enabled=[(i,p) for i,p in server['protocols'].items() if protocol_type(i,p)=='cf' and p.get('enabled',True)]
+        from protocols import protocol_type,cf_origin
+        enabled=[(i,p) for i,p in server['protocols'].items() if protocol_type(i,p)=='cf' and p.get('enabled',True) and p.get('sni')==server.get('domains',{}).get('cf')]
         if not enabled:raise ValueError('没有启用的 CF 入站')
         ingress=after.get('ingress',[])
         for ident,p in enabled:
-            service='http://127.0.0.1:'+str(p['port'])
+            service=cf_origin({**p,'listen':p.get('listen','127.0.0.1')})
             wanted={'hostname':names['cf'],'service':service}
             if len(enabled)>1:wanted['path']='^'+re.escape('/'+p['ws_path'].lstrip('/'))+'$'
             found=[r for r in ingress if r.get('hostname')==names['cf'] and r.get('path')==wanted.get('path')]

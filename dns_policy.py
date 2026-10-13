@@ -11,6 +11,9 @@ BOOTSTRAP = ['https://223.5.5.5/dns-query', 'https://223.6.6.6/dns-query']
 REMOTE = ['https://1.1.1.1/dns-query', 'https://1.0.0.1/dns-query']
 # Only stable, self-owned origin addresses are pinned; CDN ingress remains dynamic.
 FEISHU = ['feishu.cn','feishucdn.com']
+# These are advertiser consoles, not ad-delivery endpoints for this profile.
+# Keep the allowlist exact so unrelated SDK and tracking hosts remain blockable.
+BUSINESS_CONSOLES = ['ads.applovin.com', 'ads.tiktok.com']
 LOCAL_DOH = 'https://223.6.6.6/dns-query'
 DNS_DOMAINS = ['dns.alidns.com', 'doh.pub', 'dot.pub', 'dns.google',
                'cloudflare-dns.com', 'one.one.one.one', 'dns.quad9.net']
@@ -24,6 +27,7 @@ DNS_IPV6 = ['2606:4700:4700::1111', '2606:4700:4700::1001',
 def guarded_rules(original):
     guards = ['DST-PORT,53,REJECT', 'DST-PORT,853,日常线路']
     guards += ['DOMAIN-SUFFIX,'+d+',DIRECT' for d in FEISHU]
+    guards += ['DOMAIN,'+d+',日常线路' for d in BUSINESS_CONSOLES]
     guards += ['IP-CIDR,223.6.6.6/32,DIRECT,no-resolve']
     guards += ['DOMAIN,' + d + ',日常线路' for d in DNS_DOMAINS]
     guards += ['IP-CIDR,' + ip + '/32,日常线路,no-resolve' for ip in DNS_IPS]
@@ -46,7 +50,7 @@ def harden_config(original, client, hosts=None):
         dns['proxy-server-nameserver'] = [u + '#DIRECT' for u in BOOTSTRAP]
         dns.pop('direct-nameserver', None)
         dns.pop('direct-nameserver-follow-policy', None)
-        dns['nameserver-policy'] = {**{'+.'+d:[u+'#日常线路' for u in REMOTE] for d in ['googleapis.cn','xn--ngstr-lra8j.com']}, **{'+.'+d:[LOCAL_DOH+'#DIRECT'] for d in FEISHU}, '+.cn':[LOCAL_DOH+'#DIRECT'], 'rule-set:国内域名':[LOCAL_DOH+'#DIRECT']}
+        dns['nameserver-policy'] = {**{'+.'+d:[u+'#日常线路' for u in REMOTE] for d in ['googleapis.cn','xn--ngstr-lra8j.com']}, **{'+.'+d:[LOCAL_DOH+'#DIRECT'] for d in FEISHU}, **{d:[u+'#日常线路' for u in REMOTE] for d in BUSINESS_CONSOLES}, '+.cn':[LOCAL_DOH+'#DIRECT'], 'rule-set:国内域名':[LOCAL_DOH+'#DIRECT']}
         dns['direct-nameserver']=[LOCAL_DOH+'#DIRECT']
         dns['direct-nameserver-follow-policy']=True
         dns['use-hosts'] = True
@@ -57,7 +61,7 @@ def harden_config(original, client, hosts=None):
         assert client == 'stash'
         dns['nameserver'] = list(REMOTE)
         dns['proxy-server-nameserver'] = list(BOOTSTRAP)
-        dns['nameserver-policy'] = {**{'+.'+d:list(REMOTE) for d in ['googleapis.cn','xn--ngstr-lra8j.com']}, **{'+.'+d:[LOCAL_DOH] for d in FEISHU}, '+.cn':[LOCAL_DOH], 'geosite:cn':[LOCAL_DOH]}
+        dns['nameserver-policy'] = {**{'+.'+d:list(REMOTE) for d in ['googleapis.cn','xn--ngstr-lra8j.com']}, **{'+.'+d:[LOCAL_DOH] for d in FEISHU}, **{d:list(REMOTE) for d in BUSINESS_CONSOLES}, '+.cn':[LOCAL_DOH], 'geosite:cn':[LOCAL_DOH]}
         dns['follow-rule'] = True
     return config
 

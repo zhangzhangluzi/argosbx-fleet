@@ -129,7 +129,9 @@ func check(c Case) (r Result) {
 		}
 		defer pc.Close()
 		if c.ObfsPassword != "" {
-			pc = hy2.NewSalamanderConn(pc, []byte(c.ObfsPassword))
+			// Hide the raw socket fast path: its vector writer assumes a dual-stack
+			// socket, while this observer deliberately binds the selected IP family.
+			pc = hy2.NewSalamanderConn(struct{ net.PacketConn }{pc}, []byte(c.ObfsPassword))
 		}
 		addr, e := net.ResolveUDPAddr(family, address)
 		if e != nil {

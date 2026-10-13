@@ -6,10 +6,34 @@ import re
 IDS=('reality','hy2','cf','anytls','shadowtls','salamander','xhttp')
 LABELS={'reality':'VLESS-REALITY-Vision','hy2':'Hysteria2','cf':'CF-VMess-WS-TLS','anytls':'AnyTLS','shadowtls':'SS2022-ShadowTLS-v3','salamander':'Hysteria2-Salamander','xhttp':'CF-VLESS-XHTTP-TLS'}
 FIELDS={'type','enabled','port','sni','certificate','cover_host','cover_port','listen','padding_scheme','ws_path','alpn','client','path','mode'}
-CLIENT_FIELDS={'idle-session-check-interval','idle-session-timeout','min-idle-session','fast-open','client-fingerprint','udp-over-tcp','udp-over-tcp-version'}
+CLIENT_FIELDS={'idle-session-check-interval','idle-session-timeout','min-idle-session','fast-open','client-fingerprint','udp-over-tcp','udp-over-tcp-version','reuse-settings'}
+XHTTP_REUSE={'max-concurrency':'8-16','max-connections':'0','c-max-reuse-times':'0',
+             'h-max-request-times':'0','h-max-reusable-secs':'1800-3000','h-keep-alive-period':0}
+XHTTP_XMUX={'max-concurrency':'maxConcurrency','max-connections':'maxConnections',
+            'c-max-reuse-times':'cMaxReuseTimes','h-max-request-times':'hMaxRequestTimes',
+            'h-max-reusable-secs':'hMaxReusableSecs','h-keep-alive-period':'hKeepAlivePeriod'}
+
+def validate_reuse(value):
+    if not isinstance(value,dict) or not value or set(value)-set(XHTTP_REUSE):raise ValueError('XHTTP 复用参数无效')
+    limits={'max-concurrency':128,'max-connections':128,'c-max-reuse-times':1000000,
+            'h-max-request-times':1000000,'h-max-reusable-secs':86400}
+    active={}
+    for key,item in value.items():
+        if key=='h-keep-alive-period':
+            if type(item) is not int or not -1<=item<=3600:raise ValueError('XHTTP 保活周期无效')
+            continue
+        if not isinstance(item,str) or not re.fullmatch(r'(0|[1-9][0-9]*)(?:-(0|[1-9][0-9]*))?',item):raise ValueError('XHTTP 复用范围无效')
+        parts=[int(v) for v in item.split('-')];low,high=parts[0],parts[-1]
+        if low>high or high>limits[key] or (low==0 and high!=0):raise ValueError('XHTTP 复用范围无效')
+        active[key]=high>0
+    if active.get('max-concurrency') and active.get('max-connections'):raise ValueError('XHTTP 并发数与连接数不能同时限制')
+
+def xhttp_xmux(value):
+    validate_reuse(value)
+    return {XHTTP_XMUX[k]:v for k,v in value.items()}
 CLIENT_BY_TYPE={
     'reality':{'fast-open','client-fingerprint'}, 'cf':{'fast-open','client-fingerprint'},
-    'xhttp':{'client-fingerprint'}, 'hy2':set(), 'salamander':set(),
+    'xhttp':{'client-fingerprint','reuse-settings'}, 'hy2':set(), 'salamander':set(),
     'anytls':{'fast-open','client-fingerprint','idle-session-check-interval','idle-session-timeout','min-idle-session'},
     'shadowtls':{'fast-open','client-fingerprint','udp-over-tcp','udp-over-tcp-version'},
 }
@@ -54,6 +78,7 @@ def validate_settings(settings,complete=False):
         if 'client' in p:
             if not isinstance(p['client'],dict) or set(p['client'])-CLIENT_BY_TYPE[kind]:raise ValueError('该协议的客户端参数无效: '+ident)
             for key,value in p['client'].items():
+                if key=='reuse-settings':validate_reuse(value)
                 if key in ('fast-open','udp-over-tcp') and type(value) is not bool:raise ValueError('客户端开关必须为布尔值')
                 if key in ('idle-session-check-interval','idle-session-timeout') and (type(value) is not int or not 0<=value<=86400):raise ValueError('连接复用周期无效')
                 if key=='min-idle-session' and (type(value) is not int or not 0<=value<=8):raise ValueError('保留空闲会话必须为 0 到 8')
@@ -133,6 +158,8 @@ def adopt(configs,clients,services):
         if ident=='xhttp':p.update(sni=templates[ident]['servername'],path=n['streamSettings']['xhttpSettings']['path'],mode=n['streamSettings']['xhttpSettings']['mode'])
         if ident=='anytls':p['padding_scheme']=n.get('padding_scheme',[])
         p['client']={k:v for k,v in templates[ident].items() if k in CLIENT_BY_TYPE[ident]}
+        if ident=='xhttp' and templates[ident].get('xhttp-opts',{}).get('reuse-settings'):
+            p['client']['reuse-settings']=copy.deepcopy(templates[ident]['xhttp-opts']['reuse-settings'])
         state['protocols'][ident]=p
     validate_settings(state['protocols'])
     return state
@@ -198,7 +225,8 @@ def export(configs,state):
         b=state['bindings'][ident];n=entry(configs[b['path']],b);node=copy.deepcopy(template)
         if kind in ('cf','xhttp'):node['name']=node['name'].replace('CF入口-','CF-')
         for key in CLIENT_FIELDS:node.pop(key,None)
-        node.update(p.get('client',{}));node['port']=p['port']
+        client=copy.deepcopy(p.get('client',{}));reuse=client.pop('reuse-settings',None)
+        node.update(client);node['port']=p['port']
         if kind=='reality':
             r=n['streamSettings']['realitySettings'];node.update(uuid=n['settings']['clients'][0]['id'],servername=r['serverNames'][0]);node['reality-opts']['short-id']=node['reality-opts']['short-id'] if str(node['reality-opts']['short-id']) in r['shortIds'] else r['shortIds'][0]
         elif kind=='hy2':node.update(password=n['settings']['clients'][0]['auth'],sni=p['sni'],alpn=p['alpn'])
@@ -216,6 +244,7 @@ def export(configs,state):
         elif kind=='xhttp':
             node.update(port=443,server=p['sni'],servername=p['sni'],uuid=n['settings']['clients'][0]['id'])
             node['xhttp-opts'].update(path=p['path'],mode=p['mode'],host=p['sni'])
+            if reuse is not None:node['xhttp-opts']['reuse-settings']=reuse
         from ech import client_options
         node.pop('ech-opts',None)
         node.update(client_options(state,ident,n))

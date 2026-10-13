@@ -25,6 +25,10 @@ assert before=={p:Path(p).read_bytes() for p in before}
 # TLS 1.3 cover server for REALITY and ShadowTLS; never relies on an external website.
 class Handler(http.server.BaseHTTPRequestHandler):
  def do_GET(self):
+  if self.path=='/slow':
+   self.send_response(200);self.send_header('Content-Length','8');self.end_headers()
+   for _ in range(8):self.wfile.write(b'x');self.wfile.flush();time.sleep(1)
+   return
   body=b'fleet-native-ok';self.send_response(200);self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body)
  def log_message(self,*args):pass
 plain=http.server.ThreadingHTTPServer(('127.0.0.1',25889),Handler)
@@ -110,6 +114,41 @@ candidate=xhttp.candidate();candidate.update(server='127.0.0.1',port=18084,tls=F
 candidate['xhttp-opts']['host']='edge.example.com'
 result=probe.check_case({'name':'xhttp','node':candidate,'expected_ips':['127.0.0.1']},https_check=checked(probe_https),udp_check=checked(probe_udp))
 assert all(result[k] for k in ('https_ok','exit_ok','udp_ok')),result
+assert result['first_attempt_ok'] and result['attempt_count']==1,result
+# A separate TLS/H2 fixture verifies that lifetime rotation drains ongoing
+# transfers instead of terminating them. The live node uses 1800-3000 seconds;
+# only this isolated fixture shortens it to two seconds.
+native=json.loads(xhttp.CONFIG.read_text());inbound=native['inbounds'][0]
+inbound['port']=25892
+inbound['streamSettings'].update(security='tls',tlsSettings={'alpn':['h2'],'certificates':[{'certificateFile':server['certificates']['domain']['certificate_file'],'keyFile':server['certificates']['domain']['key_file']}]})
+save('/tmp/fleet-ci-xhttp-tls.json',native)
+with open('/tmp/fleet-ci-xhttp-tls.log','w') as log:
+ tls_server=subprocess.Popen(['/root/agsbx/xray','run','-c','/tmp/fleet-ci-xhttp-tls.json'],stdout=log,stderr=log)
+ try:
+  time.sleep(.5)
+  node=copy.deepcopy(candidate);node.update(tls=True,port=25892,servername='ci.example.com',_certificate_path=server['certificates']['domain']['certificate_file'])
+  node['xhttp-opts']['reuse-settings']['h-max-reusable-secs']='2'
+  case={'name':'xhttp-h2-rotation','node':node,'expected_ips':['127.0.0.1']}
+  def connections():
+   lines=subprocess.check_output(['ss','-tnH'],text=True).splitlines()
+   return {line.split()[3] for line in lines if line.split()[0]=='ESTAB' and line.split()[4]=='127.0.0.1:25892'}
+  with probe.client_session(case) as port:
+   assert probe_https(port)=='127.0.0.1'
+   raw,_=probe.socks(port,'127.0.0.1',25888)
+   context=ssl.create_default_context(cafile=server['certificates']['domain']['certificate_file'])
+   with raw,context.wrap_socket(raw,server_hostname='ci.example.com') as stream:
+    stream.sendall(b'GET /slow HTTP/1.1\r\nHost: ci.example.com\r\nConnection: close\r\n\r\n')
+    response=probe.http.client.HTTPResponse(stream);response.begin();assert response.status==200
+    assert response.read(1)==b'x';initial=connections();assert initial
+    time.sleep(3)
+    assert probe_https(port)=='127.0.0.1'
+    rotated=connections();assert rotated-initial,'XHTTP did not rotate its HTTP/2 connection'
+    assert rotated&initial,'XHTTP terminated the active transfer during rotation'
+    assert response.read()==b'x'*7,'XHTTP interrupted the existing transfer'
+   assert probe_udp(port)
+  print('PASS native XHTTP H2 rotation, ongoing transfer drain, new HTTPS and UDP',flush=True)
+ finally:
+  tls_server.terminate();tls_server.wait(timeout=10)
 assert pids=={u:agent.cmd(['systemctl','show',u,'-p','MainPID','--value']) for u in pids}
 assert before=={p:Path(p).read_bytes() for p in before}
 xhttp.recover()

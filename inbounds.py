@@ -4,7 +4,7 @@ import copy
 import secrets
 import subprocess
 import uuid
-from protocols import protocol_type,validate_settings,LABELS
+from protocols import protocol_type,validate_settings,LABELS,XHTTP_REUSE
 
 CORES={'reality':'xray','hy2':'xray','cf':'xray','anytls':'sing-box','shadowtls':'sing-box','salamander':'sing-box','xhttp':'xray'}
 
@@ -54,7 +54,7 @@ def create(ident,p,certificates,keygen=x25519):
     elif kind=='xhttp':
         private,public=vless_encryption()
         native.update(protocol='vless',settings={'clients':[{'id':uid}],'decryption':private},streamSettings={'network':'xhttp','security':'none','xhttpSettings':{'path':p['path'],'mode':p['mode']}})
-        node.update(type='vless',uuid=uid,encryption=public,server=p['sni'],servername=p['sni'],port=443,tls=True,network='xhttp',**{'xhttp-opts':{'path':p['path'],'host':p['sni'],'mode':p['mode'],'reuse-settings':{'max-concurrency':'8-16'}},'skip-cert-verify':False,'client-fingerprint':'chrome'})
+        node.update(type='vless',uuid=uid,encryption=public,server=p['sni'],servername=p['sni'],port=443,tls=True,network='xhttp',**{'xhttp-opts':{'path':p['path'],'host':p['sni'],'mode':p['mode'],'reuse-settings':copy.deepcopy(p.get('client',{}).get('reuse-settings',XHTTP_REUSE))},'skip-cert-verify':False,'client-fingerprint':'chrome'})
     elif kind=='anytls':
         native.update(type='anytls',users=[{'name':ident,'password':password}],padding_scheme=p['padding_scheme'],tls=tls)
         node.update(type='anytls',password=password,sni=p['sni'],**{'skip-cert-verify':False})

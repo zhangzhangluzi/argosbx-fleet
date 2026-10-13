@@ -49,4 +49,5 @@ def verify_new_server(config,server,nodes):
         failed=[r['name'] for r in values if not all(r.get(k) is True for k in ('https_ok','exit_ok','udp_ok'))]
         if result.get('passed') is not True or failed:raise RuntimeError('新机节点验收失败：'+','.join(failed)+'；保持 pending，不发布节点')
         results.extend({**r,'observer':peer} for r in values)
-    return {'passed':True,'results':results}
+    return {'passed':True,'first_attempt_passed':all(r.get('first_attempt_ok') is True for r in results),
+            'retry_recovered':sum(r.get('retry_recovered') is True for r in results),'results':results}

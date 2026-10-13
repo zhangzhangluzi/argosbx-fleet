@@ -134,3 +134,13 @@ python3 servers.py publish
 ```
 验收失败使用 `xhttp-recover`，只恢复本次 CF 路由并移除新增服务。stage 不更新源订阅，commit 后才进入正常登记；未完成事务阻止正式发布。已提交入口的后续启停、调参、删除使用正常协议管理，需要重启时只影响独立 XHTTP 服务。同类新入站不会自动承诺无中断。
 XHTTP 路由覆盖路径下的会话与序号，原 WS 路径保留；复用使用显式 `reuse-settings`。三种订阅分别通过 Sub-Store 原生转换，必须核验 XHTTP 与 Encryption 字段未丢失。官方支持与真机验收分开记录；本仓库不宣称已经验证用户手机上的 Stash/Shadowrocket。
+
+XHTTP 的客户端复用配置写在该入站的 `client.reuse-settings`，导出时映射到节点的 `xhttp-opts.reuse-settings`。推荐显式配置如下；仅调整这一项不会重启代理监听服务：
+
+```json
+{"max-concurrency":"8-16","max-connections":"0","c-max-reuse-times":"0","h-max-request-times":"0","h-max-reusable-secs":"1800-3000","h-keep-alive-period":0}
+```
+
+连接到达复用寿命后停止承接新请求，已有传输完成后再关闭；请求次数不额外设限，保活采用内核默认值。`max-concurrency` 与 `max-connections` 不能同时为正。旧入站保持原参数，升级后应通过 `protocol-plan`／`protocol-apply` 显式同步配置，再发布原订阅。
+
+原生验收的 `passed` 只表示最多两次尝试内连通成功；`first_attempt_passed`、`retry_recovered` 和逐次 `attempts` 分别记录首次结果与重试恢复，不能将其等同于长期稳定性。每次尝试独立检查 HTTPS、出口与 UDP，异常只输出类型和系统错误码，避免泄漏订阅凭据。

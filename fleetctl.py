@@ -54,11 +54,9 @@ def main():
         if checked['protocols']!=server['protocols'] or checked['certificates']!=server['certificates']:raise ValueError('资料在计划后变化，请重新 protocol-plan')
         previous=checked['previous_protocols']
         if checked['restart_required'] and not a.allow_restart:raise ValueError('新入站需要原生服务重启；未修改服务或 Cloudflare，请在维护窗口使用 --allow-restart')
-        from protocols import protocol_type
-        old_cf={i:p for i,p in previous.items() if protocol_type(i,p) in ('cf','xhttp')}
-        new_cf={i:p for i,p in server['protocols'].items() if protocol_type(i,p) in ('cf','xhttp')}
+        cf_changed=tunnels.routes({'protocols':previous})!=tunnels.routes(server)
         cf=None;cf_journal=STATE/(a.server+'-protocol-cf.json')
-        if old_cf!=new_cf:
+        if cf_changed:
             cf=Cloudflare(config['cloudflare']['token_file'])
             if cf_journal.exists():raise ValueError('CF 入站有未完成事务，先执行 protocol-recover')
             cf_plan=tunnels.change_plan(cf,server,previous)
@@ -70,7 +68,7 @@ def main():
             # Unknown SSH result: retain CF changes until native state is recovered.
             raise RuntimeError('应用结果未确认；保留 CF/原生恢复日志，请执行 protocol-recover') from None
         cf_journal.unlink(missing_ok=True)
-        result['cf_synchronized']=old_cf!=new_cf
+        result['cf_synchronized']=cf_changed
     elif a.command=='protocol-recover':
         cf_journal=STATE/(a.server+'-protocol-cf.json')
         result=remote(config,a.server,'recover',allow_restart=a.allow_restart)

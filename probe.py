@@ -1,5 +1,5 @@
 """Short-lived sing-box clients. No TUN, system DNS or production listener changes."""
-import concurrent.futures,http.client,ipaddress,json,os,secrets,socket,ssl,struct,subprocess,tempfile,time
+import concurrent.futures,contextlib,http.client,ipaddress,json,os,secrets,socket,ssl,struct,subprocess,tempfile,time,threading
 from pathlib import Path
 
 def outbound(n):
@@ -35,10 +35,14 @@ def outbound(n):
 
 def xhttp_client(n,port):
     tls={'serverName':n['servername'],'fingerprint':n.get('client-fingerprint','chrome'),'alpn':['h2']}
+    if n.get('_certificate_path'):tls['certificates']=[{'certificateFile':n['_certificate_path'],'usage':'verify'}]
     ech=n.get('ech-opts',{})
     if ech.get('enable'):tls['echConfigList']=ech.get('config') or ech.get('query-server-name','cloudflare-ech.com')+'+https://dns.alidns.com/dns-query'
     opts=n['xhttp-opts']
-    stream={'network':'xhttp','security':'tls' if n.get('tls') else 'none','xhttpSettings':{'path':opts['path'],'host':opts.get('host'),'mode':opts['mode'],'extra':{'xmux':{'maxConcurrency':'8-16'}}}}
+    from protocols import xhttp_xmux
+    settings={'path':opts['path'],'host':opts.get('host'),'mode':opts['mode']}
+    if opts.get('reuse-settings'):settings['extra']={'xmux':xhttp_xmux(opts['reuse-settings'])}
+    stream={'network':'xhttp','security':'tls' if n.get('tls') else 'none','xhttpSettings':settings}
     if n.get('tls'):stream['tlsSettings']=tls
     return {'log':{'loglevel':'warning'},'inbounds':[{'listen':'127.0.0.1','port':port,'protocol':'socks','settings':{'udp':True}}],
             'outbounds':[{'protocol':'vless','settings':{'vnext':[{'address':n['server'],'port':n['port'],'users':[{'id':n['uuid'],'encryption':n['encryption']}]}]},'streamSettings':stream}]}
@@ -88,22 +92,51 @@ def udp_dns(port):
         if got!=ident or flags&15 or not answers:raise OSError('UDP DNS reply')
         return True
 
-def check_case(case,binary='/root/agsbx/sing-box',https_check=https,udp_check=udp_dns):
-    result={'name':case['name'],'https_ok':False,'exit_ok':False,'udp_ok':False}
-    with tempfile.TemporaryDirectory(prefix='fleet-probe-') as temp:
+_PORT_LOCK = threading.Lock()
+_PORTS = set()
+
+@contextlib.contextmanager
+def reserved_port():
+    """Reserve both protocols until launch; exclude concurrent probes until cleanup."""
+    for _ in range(64):
+        tcp=socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+        udp=socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
+        try:
+            tcp.bind(('127.0.0.1',0));port=tcp.getsockname()[1]
+            udp.bind(('127.0.0.1',port))
+            with _PORT_LOCK:
+                if port in _PORTS:raise OSError('probe port already reserved')
+                _PORTS.add(port)
+            break
+        except OSError:
+            tcp.close();udp.close()
+    else:raise OSError('no free TCP/UDP probe port')
+    def release():
+        tcp.close();udp.close()
+    try:yield port,release
+    finally:
+        release()
+        with _PORT_LOCK:_PORTS.discard(port)
+
+@contextlib.contextmanager
+def client_session(case,binary='/root/agsbx/sing-box'):
+    """One isolated core for all attempts and optional idle/stream acceptance."""
+    with tempfile.TemporaryDirectory(prefix='fleet-probe-') as temp,reserved_port() as (port,release):
         root=Path(temp)
-        with socket.socket() as sock:sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]
         is_xhttp=case['node'].get('network')=='xhttp'
         config=xhttp_client(case['node'],port) if is_xhttp else {'log':{'level':'error'},'inbounds':[{'type':'socks','listen':'127.0.0.1','listen_port':port}], 'outbounds':outbound(case['node'])}
         # Hostname-based CF ingress must resolve without any local VPN or TUN dependency.
-        config['dns']={'servers':[{'type':'https','tag':'local','server':'223.5.5.5','path':'/dns-query'},
-            {'type':'https','tag':'ech','server':'dns.alidns.com','path':'/dns-query','domain_resolver':'local'}],
-            'rules':[{'domain':['cloudflare-ech.com'],'server':'ech'}],'final':'local'}
-        config['route']={'default_domain_resolver':'local'}
-        if is_xhttp:
-            config.pop('dns');config.pop('route');binary=str(Path(binary).with_name('xray'))
+        if is_xhttp:binary=str(Path(binary).with_name('xray'))
+        else:
+            config['dns']={'servers':[{'type':'https','tag':'local','server':'223.5.5.5','path':'/dns-query'},
+                {'type':'https','tag':'ech','server':'dns.alidns.com','path':'/dns-query','domain_resolver':'local'}],
+                'rules':[{'domain':['cloudflare-ech.com'],'server':'ech'}],'final':'local'}
+            config['route']={'default_domain_resolver':'local'}
         path=root/'client.json';path.write_text(json.dumps(config));path.chmod(0o600)
         with (root/'log').open('w') as log:
+            # Native cores cannot inherit these listeners. Keep the reservation
+            # registry until exit and release sockets immediately before launch.
+            release()
             proc=subprocess.Popen([binary,'run','-c',str(path)],stdout=log,stderr=log)
             try:
                 for _ in range(100):
@@ -112,26 +145,68 @@ def check_case(case,binary='/root/agsbx/sing-box',https_check=https,udp_check=ud
                         with socket.create_connection(('127.0.0.1',port),.1):break
                     except OSError:time.sleep(.05)
                 else:raise OSError('isolated client unavailable')
-                for attempt in range(2):
-                    try:
-                        address=https_check(port)
-                        result.update(https_ok=True,exit_ok=address in case['expected_ips'])
-                        result['udp_ok']=udp_check(port)
-                        if all(result[k] for k in ('https_ok','exit_ok','udp_ok')):break
-                    except Exception:pass
-                return result
+                yield port
             finally:
                 if proc.poll() is None:proc.terminate()
                 try:proc.wait(timeout=5)
                 except subprocess.TimeoutExpired:proc.kill();proc.wait(timeout=5)
 
+def error_info(error):
+    # Exception text can contain URLs, credentials or native configuration.
+    info={'type':type(error).__name__}
+    if isinstance(getattr(error,'errno',None),int):info['errno']=error.errno
+    return info
+
+def elapsed(start):return round((time.monotonic()-start)*1000,2)
+
+def run_attempts(port,case,https_check=https,udp_check=udp_dns):
+    result={'name':case['name'],'attempts':[]}
+    start=time.monotonic()
+    for number in range(1,3):
+        attempt={'number':number,'https_ok':False,'exit_ok':False,'udp_ok':False,'errors':{}}
+        tick=time.monotonic()
+        try:
+            address=https_check(port)
+            attempt.update(https_ok=True,exit_ok=address in case['expected_ips'])
+            if not attempt['exit_ok']:attempt['errors']['exit']={'type':'UnexpectedExit'}
+        except Exception as error:attempt['errors']['https']=error_info(error)
+        attempt['https_ms']=elapsed(tick)
+        # Check UDP independently, so HTTPS failure cannot hide its actual state.
+        tick=time.monotonic()
+        try:
+            attempt['udp_ok']=udp_check(port) is True
+            if not attempt['udp_ok']:attempt['errors']['udp']={'type':'NegativeResult'}
+        except Exception as error:attempt['errors']['udp']=error_info(error)
+        attempt['udp_ms']=elapsed(tick)
+        attempt['passed']=all(attempt[k] for k in ('https_ok','exit_ok','udp_ok'))
+        result['attempts'].append(attempt)
+        if attempt['passed']:break
+    # Never combine a success from one attempt with another attempt's failure.
+    result.update({k:attempt[k] for k in ('https_ok','exit_ok','udp_ok')})
+    result.update(passed=attempt['passed'],first_attempt_ok=result['attempts'][0]['passed'],
+                  retry_recovered=attempt['passed'] and number>1,attempt_count=number,duration_ms=elapsed(start))
+    result['status']='passed' if result['first_attempt_ok'] else 'passed_after_retry' if result['passed'] else 'failed'
+    return result
+
+def check_case(case,binary='/root/agsbx/sing-box',https_check=https,udp_check=udp_dns):
+    start=time.monotonic()
+    try:
+        with client_session(case,binary) as port:
+            result=run_attempts(port,case,https_check,udp_check)
+        result['total_ms']=elapsed(start)
+        return result
+    except Exception as error:
+        return {'name':case['name'],'passed':False,'https_ok':False,'exit_ok':False,'udp_ok':False,
+                'first_attempt_ok':False,'retry_recovered':False,'attempt_count':0,'attempts':[],
+                'status':'setup_failed','setup_error':error_info(error),'total_ms':elapsed(start)}
+
 def verify(cases):
     if not cases:raise ValueError('没有可验收节点')
-    def check(case):
-        try:return check_case(case)
-        except Exception:return {'name':case['name'],'https_ok':False,'exit_ok':False,'udp_ok':False}
-    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:results=list(pool.map(check,cases))
-    return {'passed':all(all(r[k] for k in ('https_ok','exit_ok','udp_ok')) for r in results),'results':results}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:results=list(pool.map(check_case,cases))
+    first=sum(r['first_attempt_ok'] for r in results)
+    return {'passed':all(r['passed'] for r in results),'first_attempt_passed':first==len(results),
+            'first_attempt_successes':first,'retry_recovered':sum(r['retry_recovered'] for r in results),
+            'failed':sum(not r['passed'] for r in results),'results':results}
 
 if __name__=='__main__':
     import sys

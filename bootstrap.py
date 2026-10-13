@@ -81,8 +81,9 @@ def install(server,connector_token,test_certificate=False):
     host=server['onboarding']['certificate_host'];source=urlsplit(server['subscription']['url'])
     if source.hostname!=host or source.port!=8443 or not re.fullmatch(r'/[a-zA-Z0-9_/-]{24,}',source.path) or source.query:raise ValueError('新机源订阅必须使用证书域名、8443 和至少 24 字符私密路径')
     if j['phase']<2:
-        caddy='{\n admin off\n https_port 8443\n servers {\n protocols h1 h2\n }\n}\nhttps://'+host+':8443 {\n @source path '+source.path+'\n handle @source {\n root * /srv/argosbx\n rewrite * /clmi.yaml\n file_server\n }\n handle { respond "ArgoSBX" 200 }\n}\n'
+        caddy='{\n admin off\n https_port 8443\n servers {\n protocols h1 h2\n }\n}\nhttps://'+host+':8443 {\n @source path '+source.path+'\n handle @source {\n root * /srv/argosbx\n rewrite * /clmi.yaml\n file_server\n }\n handle {\n respond "ArgoSBX" 200\n }\n}\n'
         atomic('/etc/caddy-sub/Caddyfile',caddy,0o644)
+        run(['/usr/local/bin/caddy','validate','--config','/etc/caddy-sub/Caddyfile','--adapter','caddyfile'])
         unit('caddy-sub','/usr/local/bin/caddy run --config /etc/caddy-sub/Caddyfile --adapter caddyfile','caddy-sub','Environment=HOME=/var/lib/caddy-sub\nAmbientCapabilities=CAP_NET_BIND_SERVICE\nCapabilityBoundingSet=CAP_NET_BIND_SERVICE\nExecReload=/bin/kill -USR1 $MAINPID')
         run(['systemctl','daemon-reload']);run(['systemctl','enable','--now','caddy-sub'])
         if shutil.which('ufw') and 'Status: active' in run(['ufw','status']):

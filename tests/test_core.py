@@ -183,3 +183,16 @@ class ShadowrocketRoutingTests(unittest.TestCase):
         self.assertIn('DOMAIN-SET,https://raw.githubusercontent.com/blackmatrix7/',result)
         self.assertLess(result.index('DOMAIN-SUFFIX,googleapis.cn'),result.index('DOMAIN-SET,'))
         self.assertIn('FINAL,日常线路',result)
+
+class PublishPreflightTests(unittest.TestCase):
+    def test_desired_parameters_not_applied_cannot_publish(self):
+        import servers,fleetctl
+        config={'servers':[{'id':'jp','protocols':{'anytls':{'enabled':False}},'certificates':{}}]}
+        with patch.object(fleetctl,'remote',return_value={'protocols':{'anytls':{'enabled':True}},'certificates':{},'native_configuration_matches':True,'services_active':True}):
+            with self.assertRaises(ValueError):servers.native_preflight(config)
+    def test_native_drift_and_stopped_services_block_publish(self):
+        import servers,fleetctl
+        server={'id':'jp','protocols':{'anytls':{'enabled':True}},'certificates':{}}
+        for key in ('native_configuration_matches','services_active'):
+            live={**server,'native_configuration_matches':True,'services_active':True};live[key]=False
+            with patch.object(fleetctl,'remote',return_value=live),self.assertRaises(ValueError):servers.native_preflight({'servers':[server]})

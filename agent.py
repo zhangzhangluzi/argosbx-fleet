@@ -170,6 +170,8 @@ def main():
         if a.command=='adopt':r=initialize(json.load(sys.stdin))
         elif a.command=='inspect':
             s=load();r={k:s[k] for k in ['server_id','protocols','certificates','native_sha256']}
+            r['native_configuration_matches']=all(sha(Path(p).read_text())==h for p,h in s['native_sha256'].items())
+            r['services_active']=all(subprocess.run(['systemctl','is-active','--quiet',u]).returncode==0 for u in {b['service'] for ident,b in s['bindings'].items() if s['protocols'][ident]['enabled']})
         elif a.command=='plan':r=plan(json.load(sys.stdin))
         elif a.command=='apply':r=apply(a.allow_restart)
         elif a.command=='recover':r=restore()

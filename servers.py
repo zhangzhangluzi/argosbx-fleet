@@ -57,7 +57,21 @@ def summarize(plan):
              if item['before']!=item['after']], '已保存计划':str(PLAN), '订阅地址保持':True}
 
 
+def native_preflight(config):
+    from fleetctl import remote
+    from concurrent.futures import ThreadPoolExecutor
+    configured=[s for s in config['servers'] if s.get('protocols')]
+    def check(server):
+        live=remote(config,server['id'],'inspect')
+        if live['protocols']!=server['protocols'] or live['certificates']!=server['certificates']:
+            raise ValueError(server['id']+'：原生参数尚未应用，不能先发布客户端引用')
+        if not live.get('native_configuration_matches') or not live.get('services_active'):
+            raise ValueError(server['id']+'：服务未就绪或原生配置存在漂移')
+    with ThreadPoolExecutor(max_workers=min(4,max(1,len(configured)))) as pool:list(pool.map(check,configured))
+
+
 def prepare(config):
+    native_preflight(config)
     payload=generate()
     items=[]
     for key,kind in [('subscriptions','sub'),('collections','collection'),('files','file')]:
@@ -142,6 +156,7 @@ def check_profile(value):
 def publish(config):
     plan=json.loads(PLAN.read_text())
     if plan['inventory_sha256']!=digest(config):raise ValueError('资料已改变，请重新 plan')
+    native_preflight(config)
     if any(get(config,x['kind'],x['name'])!=x['before'] for x in plan['items']):
         raise ValueError('线上配置已改变，请重新 plan')
     journal=publication.begin(JOURNAL,config,digest)

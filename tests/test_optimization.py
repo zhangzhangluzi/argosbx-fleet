@@ -2,7 +2,7 @@ import copy,json,re,sys,tempfile,unittest,subprocess
 from pathlib import Path
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
-import agent,xhttp,tunnels
+import agent,xhttp,tunnels,servers
 from protocols import validate_settings,export,classify,render
 from inbounds import create
 from test_core import fixtures
@@ -13,6 +13,22 @@ from dns_policy import harden_config
 SETTINGS={'enabled':True,'listen':'127.0.0.1','port':18084,'sni':'edge.example.com','path':'/fixture_xhttp','mode':'packet-up','client':{'client-fingerprint':'chrome'}}
 
 class ClientCapabilityTests(unittest.TestCase):
+    def test_staging_refreshes_remote_sources_before_file_conversion(self):
+        payload={'subscriptions':[{'name':'fixture','process':[]}],
+                 'collections':[{'name':'all','subscriptions':['fixture'],'process':[]}],
+                 'files':[{'name':'clash','sourceName':'all'},
+                          {'name':'shadowrocket-config','content':'[Proxy Group]\ncountry = url-test, new-node, interval=900\n'}]}
+        refreshed=False
+        def request(config,path,value=None,method=None,raw=False):
+            nonlocal refreshed
+            if path.startswith('/download/collection/') and 'noCache=true' in path:
+                refreshed=True;return 'fixture'
+            if path.startswith('/api/file/'):
+                name='new-node' if refreshed else 'stale-node'
+                return json.dumps({'proxies':[{'name':name}],'proxy-groups':[{'name':'country','proxies':[name]}],'rules':['MATCH,country']})
+        with tempfile.TemporaryDirectory() as d,patch.object(servers,'STATE',Path(d)),patch.object(servers,'STAGING',Path(d)/'stage.json'),patch.object(servers,'request',side_effect=request),patch('publication.recover'):
+            result=servers.stage({'subscription':{'backend_url':'https://example.com'}},payload)
+        self.assertTrue(refreshed);self.assertIn('clash',result)
     def test_cf_ech_processor_accepts_both_transports_and_rejects_direct(self):
         source=(Path(__file__).resolve().parents[1]/'ech-policy.js').read_text().replace('CF_HOSTS','["edge.example.com"]')
         script=source+'''

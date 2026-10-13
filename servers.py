@@ -115,6 +115,9 @@ def stage(config, payload):
         col=copy.deepcopy(payload['collections'][0]);col['name']=prefix
         col['subscriptions']=[aliases[n] for n in col['subscriptions']];col['process']=[]
         creating('collection',prefix);request(config,'/api/collections',col,'POST')
+        # Sub-Store's mihomoConfig file path does not forward noCache to its
+        # collection. Refresh the isolated collection before validating files.
+        request(config,'/download/collection/'+prefix+'?target=URI&noCache=true',raw=True)
         expected=[]
         for source in payload['files']:
             if source['name']=='shadowrocket-config': continue

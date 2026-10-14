@@ -1,0 +1,5 @@
+name: 关闭去广告
+desc: 启用此覆写后跳过广告拦截，继续按 AI、Telegram、国内外规则分流；停用此覆写即恢复去广告。
+script:
+  shortcuts:
+    fleet-adblock-enabled: 'False'

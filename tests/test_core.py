@@ -159,7 +159,7 @@ class RoutingTests(unittest.TestCase):
         for fmt in ('clash','stash'):
             base=yaml.safe_load((Path(__file__).resolve().parents[1]/'templates'/('base-'+fmt+'.yaml')).read_text());v=dns.harden_config(base,fmt,hosts={})
             policy=v['dns']['nameserver-policy']
-            key='rule-set:国内域名' if fmt=='clash' else 'geosite:cn'
+            key='rule-set:国内域名'
             self.assertTrue(policy[key][0].startswith('https://223.6.6.6/'))
             self.assertIn('1.1.1.1',policy['+.googleapis.cn'][0])
             self.assertTrue(v['rules'].index('DOMAIN-SUFFIX,googleapis.cn,日常线路')<v['rules'].index('DOMAIN-SUFFIX,cn,DIRECT'))
@@ -198,7 +198,7 @@ class ShadowrocketRoutingTests(unittest.TestCase):
         self.assertIn('dns-server = https://223.6.6.6/dns-query\n',result)
         self.assertNotIn('fallback-dns-server = system',result)
         self.assertIn('DOMAIN-SET,https://raw.githubusercontent.com/blackmatrix7/',result)
-        self.assertLess(result.index('DOMAIN-SUFFIX,googleapis.cn'),result.index('DOMAIN-SET,'))
+        self.assertLess(result.index('DOMAIN-SUFFIX,googleapis.cn'),result.index('DOMAIN-SET,https://raw.githubusercontent.com/blackmatrix7'))
         self.assertIn('FINAL,日常线路',result)
 
 class PublishPreflightTests(unittest.TestCase):

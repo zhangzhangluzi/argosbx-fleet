@@ -23,7 +23,10 @@ for fmt in ('clash','stash'):
     base.pop('proxies',None);base.pop('proxy-groups',None)
     base['rules']=[r.replace(',UDP线路', ',日常线路') for r in base['rules']]
     base=harden_config(base,fmt,hosts=node_hosts,tailscale=inventory.get('tailscale'))
-    health={'url':'https://www.gstatic.com/generate_204','interval':inventory.get('health',{}).get('interval',900),'tolerance':inventory.get('health',{}).get('tolerance',100),'lazy':False}
+    health={'url':'https://www.gstatic.com/generate_204','interval':inventory.get('health',{}).get('interval',900),'tolerance':inventory.get('health',{}).get('tolerance',100),'lazy':True}
+    if fmt == 'stash':
+        base['rules']=[r.replace('RULE-SET,广告域名,去广告', 'AND,((RULE-SET,广告域名),(SCRIPT,fleet-adblock-enabled)),REJECT') for r in base['rules']]
+        base.setdefault('script',{}).setdefault('shortcuts',{})['fleet-adblock-enabled']='True'
     if fmt == 'clash':
         base['unified-delay']=True
         health.update({'timeout':8000,'max-failed-times':3,'expected-status':'204'})
@@ -44,7 +47,7 @@ for fmt in ('clash','stash'):
   ...countries.map(c=>({name:'地区-'+c,type:'url-test',proxies:names.filter(n=>inCountry(n,c)),...HEALTHCHECK})),
   {name:'去广告',type:'select',proxies:['开启去广告','关闭去广告']},
   {name:'开启去广告',type:'select',proxies:['REJECT'],hidden:true},
-  {name:'关闭去广告',type:'select',proxies:['日常线路'],hidden:true}
+  {name:'关闭去广告',type:'select',proxies:['PASS'],hidden:true}
  ];
  for(const g of config['proxy-groups'])if(!g.proxies.length)throw new Error('Missing country '+g.name);
  input.$content=ProxyUtils.yaml.safeDump(config);
@@ -53,13 +56,14 @@ for fmt in ('clash','stash'):
     if fmt == 'clash':
         script = (root/'ech-policy.js').read_text().replace('CF_HOSTS',json.dumps(list(dict.fromkeys([s['domains']['cf'] for s in specs.values() if s['domains']['cf']]+[p['sni'] for s in specs.values() for i,p in s.get('protocols',{}).items() if protocol_type(i,p) in ('cf','xhttp') and p['enabled']])))) + '\n' + script.replace('const proxies=source.proxies;', 'const proxies=applyCfEch(source.proxies);')
     if fmt == 'stash':
+        script=script.replace(" for(const g of config['proxy-groups'])", " config['proxy-groups']=config['proxy-groups'].filter(g=>!['去广告','开启去广告','关闭去广告'].includes(g.name));\n stashCompatibleConfig(config,input.$options?._req);\n for(const g of config['proxy-groups'])",1)
         # Only country url-test groups own the timer. Stash otherwise recursively
         # tests select groups every 600 seconds, ignoring the configured cadence.
         script=script.replace("for(const g of config['proxy-groups'])if(!g.proxies.length)", "for(const g of config['proxy-groups'])if(g.type==='select')g.interval=-1;\n for(const g of config['proxy-groups'])if(!g.proxies.length)")
         script=stash_compat+'\n'+script.replace('const proxies=', 'const converted=',1).replace(' const config=',' const proxies=stashCompatibleProxies(converted,input.$options?._req);\n input.$options ??= {};\n input.$options._res ??= {};\n input.$options._res.headers=stashResponseHeaders(input.$options._res.headers);\n const config=',1)
     files.append({'name':fmt,'displayName':'ArgoSBX · '+fmt,'type':'mihomoConfig','sourceType':'collection','sourceName':'all','process':[{'type':'Script Operator','args':{'mode':'script','content':script}}]})
 # Shadowrocket configuration keeps the accepted DNS, Play and Telegram rules.
-sr=harden_shadowrocket((root/'templates'/'base-shadowrocket.conf').read_text(),hosts=node_hosts)
+sr=harden_shadowrocket((root/'templates'/'base-shadowrocket.conf').read_text(),hosts=node_hosts,tailscale=inventory.get('tailscale'),ads_url=inventory['subscription']['backend_url'].rstrip('/')+'/api/file/shadowrocket-ads')
 sr+='\n[Proxy Group]\n';start=sr.index('[Proxy Group]');end=len(sr)
 groups=['[Proxy Group]','日常线路 = select, '+', '.join('地区-'+label for label in countries.values()),'AI线路 = select, 日常线路, '+', '.join(purpose_groups),'Telegram = select, 日常线路, '+', '.join(purpose_groups)]
 for code,label in countries.items():
@@ -82,6 +86,8 @@ for code,label in countries.items():
 sr=sr[:start]+'\n'.join(groups)+'\n'+sr[end:]
 sr=sr.replace('PROTOCOL,UDP,UDP线路', 'PROTOCOL,UDP,日常线路')
 files.append({'name':'shadowrocket-config','displayName':'Shadowrocket 自动策略','source':'local','content':sr,'process':[]})
+files.insert(0,{'name':'stash-adblock-off.stoverride','displayName':'Stash · 关闭去广告覆写','source':'local','content':(root/'templates/stash-adblock-off.stoverride').read_text(),'process':[]})
+files.insert(0,{'name':'shadowrocket-ads','displayName':'Shadowrocket · 广告域名集','source':'remote','url':'https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/geosite/category-ads-all.list','process':[{'type':'Script Operator','args':{'mode':'script','content':(root/'templates/shadowrocket-ads.js').read_text()}}]})
 payload={'subscriptions':subscriptions,'collections':[{'name':'all','displayName':' · '.join(countries.values()),'subscriptions':[s['subscription']['name'] for s in specs.values()],'process':[]}],'files':files}
 payload['collections'] += [{'name':'shadowrocket-'+code.lower(),'displayName':'ArgoSBX · '+label,'subscriptions':[s['subscription']['name'] for s in specs.values() if s['country']==code],'process':[]} for code,label in countries.items()]
 export_processor={'type':'Response Transformer','customName':'FlClash / Stash 完整配置导出','args':{'mode':'script','content':(root/'flclash-response-transformer.js').read_text().replace('CF_HOSTS',json.dumps(list(dict.fromkeys([s['domains']['cf'] for s in specs.values() if s['domains']['cf']]+[p['sni'] for s in specs.values() for i,p in s.get('protocols',{}).items() if protocol_type(i,p) in ('cf','xhttp') and p['enabled']])))).replace('PROFILE_TITLES',json.dumps({'all':'ArgoSBX '+'-'.join(countries),**{'shadowrocket-'+code.lower():'ArgoSBX '+code for code in countries},**{s['subscription']['name']:'ArgoSBX '+s['name'] for s in specs.values()}},ensure_ascii=False)),'arguments':{'profile':'clash','stash_profile':'stash'}}}

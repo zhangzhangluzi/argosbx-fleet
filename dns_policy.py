@@ -6,10 +6,13 @@ from pathlib import Path
 
 
 from fleet import host_map
-from routing_policy import AI_DOMAINS,ai_rules
+from routing_policy import AI_DOMAINS, DIAGNOSTIC_DOMAINS, OVERSEAS_DOMAINS, ai_rules, overseas_rules
 
 BOOTSTRAP = ['https://223.5.5.5/dns-query', 'https://223.6.6.6/dns-query']
 REMOTE = ['https://1.1.1.1/dns-query', 'https://1.0.0.1/dns-query']
+# A distinct resolver destination lets Stash's native follow-rule route AI DNS
+# without Mihomo-only URL fragments or recursion through a resolver hostname.
+STASH_AI_DNS = ['https://8.8.8.8/dns-query', 'https://8.8.4.4/dns-query']
 # Only stable, self-owned origin addresses are pinned; CDN ingress remains dynamic.
 FEISHU = ['feishu.cn','feishucdn.com']
 # These are advertiser consoles, not ad-delivery endpoints for this profile.
@@ -53,6 +56,7 @@ def guarded_rules(original, tailscale=None):
                    'IP-CIDR6,' + TAILSCALE_CIDRS[1] + ',DIRECT,no-resolve']
     guards += ['DOMAIN-SUFFIX,'+d+',DIRECT' for d in REMOTE_CONTROL_DOMAINS]
     guards += ['DOMAIN-SUFFIX,'+d+',DIRECT' for d in FEISHU]
+    guards += ['DOMAIN-SUFFIX,'+d+',日常线路' for d in DIAGNOSTIC_DOMAINS]
     guards += ['DOMAIN,'+d+',日常线路' for d in BUSINESS_CONSOLES]
     guards += ['DOMAIN,'+d+',DIRECT' for d in DOMESTIC_BUSINESS_HOSTS]
     guards += ['IP-CIDR,223.6.6.6/32,DIRECT,no-resolve']
@@ -71,7 +75,7 @@ def harden_config(original, client, hosts=None, tailscale=None):
     # avoid DNS so explicit app/domain policies remain first and DNS cannot loop.
     config['rules'] = guarded_rules([
         'RULE-SET,国内IP,DIRECT' if r == 'RULE-SET,国内IP,DIRECT,no-resolve' else r
-        for r in ai_rules(config['rules'])], tailscale)
+        for r in overseas_rules(ai_rules(config['rules']))], tailscale)
     dns = config['dns']
     dns['default-nameserver'] = list(BOOTSTRAP)
     dns.pop('fallback', None)
@@ -101,8 +105,14 @@ def harden_config(original, client, hosts=None, tailscale=None):
         assert client == 'stash'
         dns['nameserver'] = list(REMOTE)
         dns['proxy-server-nameserver'] = list(BOOTSTRAP)
-        dns['nameserver-policy'] = {**{'+.'+d:list(REMOTE) for d in ['googleapis.cn','xn--ngstr-lra8j.com']}, **{'+.'+d:[LOCAL_DOH] for d in FEISHU}, **{d:list(REMOTE) for d in BUSINESS_CONSOLES}, '+.cn':[LOCAL_DOH], 'geosite:cn':[LOCAL_DOH]}
+        dns['nameserver-policy'] = {**{'+.'+d:list(REMOTE) for d in ['googleapis.cn','xn--ngstr-lra8j.com']}, **{'+.'+d:[LOCAL_DOH] for d in FEISHU}, **{d:list(REMOTE) for d in BUSINESS_CONSOLES}, '+.cn':[LOCAL_DOH], 'rule-set:国内域名':[LOCAL_DOH]}
+        dns['nameserver-policy'].update({'+.'+d:list(STASH_AI_DNS) for d in AI_DOMAINS})
+        config['rules'] = [r.replace(',日常线路', ',AI线路') if r in
+            ('IP-CIDR,8.8.8.8/32,日常线路,no-resolve', 'IP-CIDR,8.8.4.4/32,日常线路,no-resolve') else r
+            for r in config['rules']]
         dns['follow-rule'] = True
+    dns['nameserver-policy'].update({'+.'+d: [u + ('#日常线路' if client == 'clash' else '') for u in REMOTE]
+                                    for d in DIAGNOSTIC_DOMAINS + OVERSEAS_DOMAINS})
     dns['nameserver-policy'].update({d: [LOCAL_DOH + ('#DIRECT' if client == 'clash' else '')]
                                     for d in DOMESTIC_BUSINESS_HOSTS})
     dns['nameserver-policy'].update({'+.'+d: [LOCAL_DOH + ('#DIRECT' if client == 'clash' else '')]
@@ -119,9 +129,11 @@ def harden_config(original, client, hosts=None, tailscale=None):
     return config
 
 
-def harden_shadowrocket(original, hosts=None):
-    node_hosts=host_map() if hosts is None else hosts
-    remote = ', '.join(u + '#proxy' for u in REMOTE)
+def harden_shadowrocket(original, hosts=None, tailscale=None, ads_url=None):
+    node_hosts=dict(host_map() if hosts is None else hosts)
+    if tailscale:
+        suffix=tailscale['magic_dns_suffix']
+        node_hosts.update({suffix:'server:100.100.100.100', '*.'+suffix:'server:100.100.100.100'})
     replacements = {'dns-server': LOCAL_DOH, 'fallback-dns-server': LOCAL_DOH,
                     'proxy-dns-server': ', '.join(BOOTSTRAP), 'dns-direct-system': 'false',
                     'use-local-host-item-for-proxy': 'true'}
@@ -136,7 +148,12 @@ def harden_shadowrocket(original, hosts=None):
     next_section = result.find('\n[', rule_start)
     rule_end = next_section if next_section >= 0 else len(result)
     rules = [s for s in result[rule_start:rule_end].splitlines() if s.strip()]
-    result = result[:rule_start] + '\n' + '\n'.join(guarded_rules(ai_rules(rules))) + '\n' + result[rule_end:]
+    ads='DOMAIN-SET,'+ads_url+',REJECT' if ads_url else None
+    rules=[r for r in rules if r != ads]
+    result = result[:rule_start] + '\n' + '\n'.join(guarded_rules(([ads] if ads else [])+overseas_rules(ai_rules(rules)), tailscale)) + '\n' + result[rule_end:]
+    if tailscale:
+        result=re.sub(r'^tun-excluded-routes\s*=\s*(.*)$',
+                      lambda m:'tun-excluded-routes = '+', '.join(dict.fromkeys([s.strip() for s in m[1].split(',')]+TAILSCALE_CIDRS)),result,flags=re.M)
     host_section = '[Host]\n' + '\n'.join(k + ' = ' + v for k, v in node_hosts.items()) + '\n'
     if '[Host]' not in result:
         result += '\n' + host_section

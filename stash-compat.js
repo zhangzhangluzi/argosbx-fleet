@@ -1,13 +1,25 @@
 // Shared by Stash file generation and download response headers.
-function stashCompatibleProxies(proxies, req = {}) {
+function stashModern(req = {}) {
   const ua = String(Object.entries(req.headers || {}).find(([k]) => k.toLowerCase() === 'user-agent')?.[1] || '').toLowerCase();
   // XHTTP / VLESS Encryption: iOS/tvOS 3.6+, macOS 4.3+.
   // Unknown clients receive the fleet's 3.4-compatible subset.
   const version = ua.match(/\bstash(?:[\s_-]?mac)?[\/\s]+(\d+)\.(\d+)(?:\.(\d+))?/);
   const mac = /stash[\s_-]?mac|macos|mac os x/.test(ua) || (version && Number(version[1]) >= 4 && !/iphone|ipad|ios|tvos/.test(ua));
   const minimum = mac ? [4, 3] : [3, 6];
-  const modern = version && (Number(version[1]) > minimum[0] || Number(version[1]) === minimum[0] && Number(version[2]) >= minimum[1]);
-  const compatible = modern ? proxies : proxies.filter(p =>
+  return !!(version && (Number(version[1]) > minimum[0] || Number(version[1]) === minimum[0] && Number(version[2]) >= minimum[1]));
+}
+
+function stashCompatibleConfig(config, req = {}) {
+  if (!stashModern(req)) {
+    const policy = config.dns['nameserver-policy'];
+    policy['geosite:cn'] = policy['rule-set:国内域名'];
+    delete policy['rule-set:国内域名'];
+  }
+  return config;
+}
+
+function stashCompatibleProxies(proxies, req = {}) {
+  const compatible = stashModern(req) ? proxies : proxies.filter(p =>
     p.network !== 'xhttp' && !(p.type === 'vless' && p.encryption && p.encryption !== 'none'));
   if (!compatible.length) throw new Error('No proxies compatible with this Stash version');
   return compatible;

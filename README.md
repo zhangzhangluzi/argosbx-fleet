@@ -54,10 +54,10 @@ python3 fleetctl.py domain-commit --server jp
 先新增 DNS 和隧道路由，保留原名称；遇到已有不一致记录拒绝覆盖。Caddy 使用现有进程热加载签发证书，证书就绪后才能提交协议引用。若进程中断在 DNS 完成、证书登记之前，提交会停止，必须先恢复再重新执行，不能跳过证书阶段。证书身份切换涉及原生进程重新加载时默认停止，待维护窗口指定 `--allow-restart`。新连接地址可以继续使用原证书 SNI；只有显式要求更换 TLS 身份才安排切换。原订阅 URL、认证路径和源地址不随域名迁移改变。
 域名恢复使用 `domain-recover`，仅删除带本次事务标记的新增 DNS，避免误删他人记录。提交后的 DNS 不单独删除；先恢复客户端与服务端引用。实际新域名切换必须有有效管理 Token 和目标域名，本仓库的模拟测试不能代替真实外网验收。
 ## 分流与测速
-继续使用 [MetaCubeX/meta-rules-dat](https://github.com/MetaCubeX/meta-rules-dat) 国内域名/IP 与广告集合，日更且使用客户端缓存。优先保留 Google Play、AI、Telegram 例外；飞书业务/静态资源显式直连。Clash 的国内 DNS 跟随相同国内规则集，Stash 使用原生 geosite:cn 策略；国内走 AliDNS HTTPS，国外走代理上的 Cloudflare HTTPS。禁用明文 DNS 回退，节点解析保留独立启动路径。Shadowrocket 使用对应 ChinaMax DOMAIN-SET；其 DNS 覆写用于直连规则，改用国内 DoH，代理域名仍交给节点解析，保留独立原生格式。参见 [Stash DNS](https://stash.wiki/features/dns-server)、[Mihomo DNS](https://wiki.metacubex.one/config/dns/) 及 [Shadowrocket 配置说明](https://github.com/LOWERTOP/Shadowrocket/wiki#修改dns)。
-`health.interval` 统一支持 900 或 1800 秒，默认 900。日常、AI、Telegram、国家自动组、去广告开关及现有节点名称保留。Clash/FlClash 导出始终是带规则分组的完整配置。
+继续使用 [MetaCubeX/meta-rules-dat](https://github.com/MetaCubeX/meta-rules-dat) 国内域名/IP 与广告集合，日更且使用客户端缓存。优先保留 Google Play、AI、Telegram 例外；飞书业务/静态资源显式直连。Clash 的国内 DNS 跟随相同国内规则集，新版 Stash 同样引用国内路由规则集；旧版及未知版本保留 geosite:cn 兼容分支；国内走 AliDNS HTTPS，国外走代理上的 Cloudflare HTTPS。禁用明文 DNS 回退，节点解析保留独立启动路径。Shadowrocket 使用对应 ChinaMax DOMAIN-SET；其 DNS 覆写用于直连规则，改用国内 DoH，代理域名仍交给节点解析，保留独立原生格式。参见 [Stash DNS](https://stash.wiki/features/dns-server)、[Mihomo DNS](https://wiki.metacubex.one/config/dns/) 及 [Shadowrocket 配置说明](https://github.com/LOWERTOP/Shadowrocket/wiki#修改dns)。
+`health.interval` 统一支持 900 或 1800 秒，默认 900。日常、AI、Telegram、国家自动组及现有节点名称保留；去广告开关按客户端原生能力适配。Clash/FlClash 导出始终是带规则分组的完整配置。
 
-设为 `1800` 可统一每 30 分钟自动测速。Stash 的上层选择组显式关闭独立测速，只由国家自动组执行定时检测，避免其默认 600 秒递归测速覆盖预期间隔；手动测速及国家组自动选择仍可使用。
+设为 `1800` 可统一每 30 分钟自动测速。Stash 的上层选择组显式关闭独立测速，只由使用中的国家自动组执行定时检测，避免其默认 600 秒递归测速覆盖预期间隔；手动测速及国家组自动选择仍可使用。
 UU 远程、向日葵与 ToDesk 的服务域名及其 DNS 显式直连。Clash/FlClash 将这些域名从 Fake-IP 排除，并按进程名前缀匹配主程序、服务和辅助进程，覆盖纯 IP 的 TCP/UDP 中继与 P2P；需要运行在能识别本机进程的客户端上，不能据此保证其他设备经路由器转发的流量。明文 DNS 防护仍优先；Stash/Shadowrocket 仅使用各自兼容的域名规则，不下发 Mihomo 专用进程正则。
 ## 验证
 ```sh
@@ -96,7 +96,7 @@ python3 servers.py publish
 `ads.applovin.com`、`ads.tiktok.com` 精确匹配到日常线路，优先于去广告规则；不放行整个 AppLovin/TikTok 域名树。Clash、Stash、Shadowrocket 同步生成，前两者同步显式 DNS 策略。
 
 ## 去广告与投放后台例外
-Clash/FlClash、Stash 使用 MetaCubeX `category-ads-all.mrs` 域名表，每 86400 秒更新。规则从上到下首次匹配：精确后台例外优先；命中广告表后交给“去广告”选择组，开启执行 REJECT，关闭转日常线路。例外和 DNS 策略由 `dns_policy.py` 一处生成，保持发布与导出一致。Shadowrocket 当前没有这套可选广告表，仅同步精确路由例外。
+Clash/FlClash、Stash 使用 MetaCubeX `category-ads-all.mrs` 域名表，每 86400 秒更新。规则从上到下首次匹配：精确后台例外优先；命中广告表后交给“去广告”选择组，Clash 开启执行 REJECT，关闭执行 PASS，继续匹配后续应用和国内外规则。Stash 默认开启，使用原生覆写 `templates/stash-adblock-off.stoverride` 关闭；启用覆写只将广告匹配开关设为 False，停用即恢复，不覆盖整段规则、不发出 PASS。发布后可从原 Sub-Store 的 `/api/file/stash-adblock-off.stoverride` 安装。例外和 DNS 策略由 `dns_policy.py` 一处生成，保持发布与导出一致。Shadowrocket 默认开启同源广告域名集：Sub-Store 将 `+.` 后缀转换为原生 `.` 格式，保留精确后台例外，避免引入更大、不同口径的广告表。
 2026-10-13 对常见投放后台的公开入口、重定向和界面资源核查后，增加以下精确 DIRECT 例外及国内 DoH，不放行平台父域名：
 - `e.qq.com`、`ad.qq.com`：腾讯营销入口、投放平台与同源资源。
 - `ad.e.kuaishou.com`、`ad-m.e.kuaishou.com`：磁力智投电脑和手机版后台。
@@ -150,3 +150,11 @@ XHTTP 的客户端复用配置写在该入站的 `client.reuse-settings`，导�
 连接到达复用寿命后停止承接新请求，已有传输完成后再关闭；请求次数不额外设限，保活采用内核默认值。`max-concurrency` 与 `max-connections` 不能同时为正。旧入站保持原参数，升级后应通过 `protocol-plan`／`protocol-apply` 显式同步配置，再发布原订阅。
 
 原生验收的 `passed` 只表示最多两次尝试内连通成功；`first_attempt_passed`、`retry_recovered` 和逐次 `attempts` 分别记录首次结果与重试恢复，不能将其等同于长期稳定性。每次尝试独立检查 HTTPS、出口与 UDP，异常只输出类型和系统错误码，避免泄漏订阅凭据。
+
+## v1.2.7：规则语义与 DNS 性能
+- BrowserLeaks、DNSLeakTest、IPLeak 的页面及子域名明确走日常线路，DNS 同步；这是用途例外，不代表 WebRTC、系统或所有 DNS 路径已经无泄漏。
+- 常用 Google/YouTube/GitHub/X 域名在国内 IP 兜底之前显式分流，仍排在广告和 AI 等用途规则之后；不扩大到整个平台共享 CDN。未知域名保留需要解析的国内 IP 兜底。
+- Stash iOS/tvOS 3.6+、macOS 4.3+ 的国内 DNS 与路由共享 `rule-set:国内域名`；低版本及未知版本使用兼容分支。Stash 的 AI DNS 使用独立 Google DoH IP，经原生 `follow-rule` 送往 AI 线路；日常 DNS 保留 Cloudflare，节点解析保留独立引导，避免相互依赖。Clash 继续使用原生 `#AI线路`。
+- Clash/Stash 国家自动组 `lazy:true`，未使用的组不持续探测，重新使用时按原生机制检测；上层 Stash 选择组 `interval:-1`。`health.interval` 的现有 1800 秒配置保持。Shadowrocket 保留原生 30 分钟 URL 测试，不添加无依据的 lazy 字段。
+- Shadowrocket 仅对登记 Tailnet 的域名使用本地 MagicDNS，精确允许 `100.100.100.100:53`；其他明文 DNS 仍拦截。私有 IPv4/IPv6 走直连；需要设备已连接同一 Tailnet，不能把规则配置等同于建立了 Tailscale 隧道。
+- 订阅内核验证不能替代 iPhone Stash/Shadowrocket 的实际运行验收。

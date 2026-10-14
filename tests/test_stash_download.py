@@ -35,7 +35,7 @@ SCRIPT
  const result=await transformFunction({body:JSON.stringify({proxies:NODES}),headers:{'Content-Length':'1',Vary:'Origin'}},{source:{_collection:{name:'all'}}});
  console.log(JSON.stringify({result,usedProfile}));
 }catch(error){console.log(JSON.stringify({error:error.message}));}})();
-'''.replace('FILES',json.dumps(self.payload['files'] if files is None else files)).replace('REQUEST',json.dumps(request)).replace('ARGS',json.dumps(op['arguments'])).replace('SCRIPT',op['content']).replace('NODES',json.dumps(self.nodes if nodes is None else nodes))
+'''.replace('FILES',json.dumps(self.payload['files'] if files is None else files)).replace('REQUEST',json.dumps(request)).replace('ARGS',json.dumps(op['arguments'])).replace('\nSCRIPT\n','\n'+op['content']+'\n').replace('NODES',json.dumps(self.nodes if nodes is None else nodes))
         return json.loads(subprocess.check_output(['node','-e',script],text=True))
 
     def check(self,result,count):
@@ -43,7 +43,7 @@ SCRIPT
         value=json.loads(result['result']['body']);servers.check_profile(value)
         self.assertEqual(len(value['proxies']),count)
         self.assertEqual(value['mode'],'rule');self.assertIn('dns',value)
-        self.assertIn('去广告',[g['name'] for g in value['proxy-groups']])
+        self.assertTrue('去广告' in [g['name'] for g in value['proxy-groups']] or value.get('script',{}).get('shortcuts',{}).get('fleet-adblock-enabled')=='True')
         self.assertIn('content-type',result['result']['headers']);self.assertNotIn('Content-Length',result['result']['headers'])
         return value
 
@@ -70,6 +70,7 @@ SCRIPT
                     if group['type']=='url-test':
                         self.assertEqual(group['interval'],interval)
                         self.assertEqual(group['tolerance'],100)
+                        self.assertTrue(group['lazy'])
                     elif ua.startswith('Stash'):
                         self.assertEqual(group['interval'],-1)
                     else:self.assertNotIn('interval',group)
@@ -116,7 +117,7 @@ SCRIPT
 try {const input={$content:JSON.stringify({proxies:NODES}),$options:{_req:REQUEST,_res:{headers:{Vary:'Origin','Cache-Control':'public','Content-Length':'1'}}}};
  const output=operator(input);console.log(JSON.stringify(output));
 }catch(error){console.log(JSON.stringify({error:error.message}));}
-'''.replace('SCRIPT',op).replace('REQUEST',json.dumps(request)).replace('NODES',json.dumps(self.nodes if nodes is None else nodes))
+'''.replace('\nSCRIPT\n','\n'+op+'\n').replace('REQUEST',json.dumps(request)).replace('NODES',json.dumps(self.nodes if nodes is None else nodes))
         return json.loads(subprocess.check_output(['node','-e',script],text=True))
 
     def test_direct_file_matches_download_for_all_client_versions(self):
@@ -149,6 +150,39 @@ try {const input={$content:JSON.stringify({proxies:NODES}),$options:{_req:REQUES
 
     def test_file_refuses_an_empty_compatible_subset(self):
         self.assertIn('error',self.render_file({},[self.nodes[1]]))
+
+    def test_stash_dns_capabilities_and_ad_override(self):
+        for ua,modern in [('Stash/3.6.2',True),('StashMac/4.3.0',True),('Stash/3.4.0',False),('Stash',False)]:
+            value=json.loads(self.render_file({'headers':{'User-Agent':ua}})['$content'])
+            policy=value['dns']['nameserver-policy']
+            self.assertIn('rule-set:国内域名' if modern else 'geosite:cn',policy)
+            self.assertNotIn('geosite:cn' if modern else 'rule-set:国内域名',policy)
+            self.assertEqual(value['script']['shortcuts']['fleet-adblock-enabled'],'True')
+            self.assertIn('AND,((RULE-SET,广告域名),(SCRIPT,fleet-adblock-enabled)),REJECT',value['rules'])
+            self.assertFalse(any('去广告' in g['name'] or 'PASS' in g['proxies'] for g in value['proxy-groups']))
+        raw=next(f['content'] for f in self.payload['files'] if f['name']=='stash-adblock-off.stoverride')
+        servers.check_stash_override(raw)
+        import yaml
+        override=yaml.safe_load(raw)
+        # Native recursive map merge disables only this shortcut, leaving the
+        # rule sequence and the provider intact, including future updates.
+        value['script']['shortcuts'].update(override['script']['shortcuts'])
+        self.assertEqual(value['script']['shortcuts']['fleet-adblock-enabled'],'False')
+
+    def test_clash_off_passes_and_stash_validator_refuses_pass(self):
+        value=self.check(self.render({'headers':{'User-Agent':'FlClash/1'}}),2)
+        off=next(g for g in value['proxy-groups'] if g['name']=='关闭去广告')
+        self.assertEqual(off['proxies'],['PASS'])
+        value['dns']['follow-rule']=True
+        with self.assertRaises(ValueError):servers.check_profile(value)
+
+    def test_shadowrocket_ad_domain_conversion_preserves_scope(self):
+        op=next(f for f in self.payload['files'] if f['name']=='shadowrocket-ads')['process'][0]['args']['content']
+        for body,wanted in [('# title\n+.ad.example\nexact.example\n+.ad.example\n','.ad.example\nexact.example\n'),('','ERROR'),('DOMAIN-SUFFIX,example.com','ERROR'),('<html>error</html>','ERROR')]:
+            code=op+'\ntry {console.log(JSON.stringify(operator({$content:'+json.dumps(body)+'}).$content));}catch(e){console.log(JSON.stringify("ERROR"));}'
+            result=json.loads(subprocess.check_output(['node','-e',code],text=True))
+            self.assertEqual(result,wanted)
+            if wanted!='ERROR':servers.check_sr_ads(result)
 
     def test_download_remains_compatible_during_file_processor_upgrade(self):
         from copy import deepcopy

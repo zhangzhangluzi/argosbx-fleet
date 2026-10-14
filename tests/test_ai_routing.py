@@ -24,9 +24,9 @@ class AiRoutingTests(unittest.TestCase):
 
     def test_client_coverage_is_identical_before_domestic_ip_fallback(self):
         profiles = list(self.profiles())
-        common = {r for r in profiles[0][1] if r.endswith(',AI线路')}
+        common = {r for r in profiles[0][1] if r.startswith('DOMAIN-SUFFIX,') and r.endswith(',AI线路')}
         for client, rules in profiles:
-            ai = [r for r in rules if r.endswith(',AI线路')]
+            ai = [r for r in rules if r.startswith('DOMAIN-SUFFIX,') and r.endswith(',AI线路')]
             self.assertEqual(set(ai), common, client)
             self.assertEqual(len(ai), len(set(ai)), client)
             fallback = 'GEOIP,CN,DIRECT' if client == 'shadowrocket' else 'RULE-SET,国内IP,DIRECT'
@@ -41,7 +41,7 @@ class AiRoutingTests(unittest.TestCase):
 
     def test_no_platform_wide_or_substring_matching(self):
         for client, rules in self.profiles():
-            suffixes = [r.split(',')[1] for r in rules if r.startswith('DOMAIN-SUFFIX,') and r.endswith(',AI线路')]
+            suffixes = [r.split(',')[1] for r in rules if r.startswith('DOMAIN-SUFFIX,') and r.startswith('DOMAIN-SUFFIX,') and r.endswith(',AI线路')]
             def matches(host):
                 return any(host == suffix or host.endswith('.'+suffix) for suffix in suffixes)
             for host in ADDED:

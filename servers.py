@@ -123,13 +123,14 @@ def stage(config, payload):
             if source['name']=='shadowrocket-config': continue
             f=copy.deepcopy(source);f['name']=prefix+'-'+source['name'];f['sourceName']=prefix
             creating('file',f['name']);request(config,'/api/files',f,'POST')
-            value=yaml.safe_load(request(config,'/api/file/'+f['name'],raw=True))
+            value=yaml.safe_load(request(config,'/api/file/'+f['name'],raw=True,**({'user_agent':'Stash/3.6.0'} if source['name']=='stash' else {})))
             check_profile(value)
             save(STATE/('validated-'+source['name']+'.json'),value)
             rendered[source['name']]=digest(value)
             names=[n['name'] for n in value['proxies']]
             if expected and names!=expected:raise ValueError('两种客户端节点名称不一致')
             expected=names
+            if source['name']=='stash':rendered.update(check_stash_file_cases(config,f['name'],value))
         sr=next(f['content'] for f in payload['files'] if f['name']=='shadowrocket-config')
         body=sr.split('[Proxy Group]',1)[1].split('\n[',1)[0]
         sr_names=[]
@@ -177,6 +178,26 @@ DOWNLOAD_CASES={
     'download-stash-modern':('Stash','Stash/3.6.0'),
 }
 
+STASH_FILE_CASES={
+    'file-stash-compatible':'Stash/3.4.0',
+    'file-stash-mac-compatible':'StashMac/4.2.0',
+    'file-stash-mac-modern':'StashMac/4.3.0',
+    'file-stash-versionless':'Stash',
+}
+
+def check_stash_file_cases(config,name,full):
+    import yaml
+    rendered={}
+    for key,ua in STASH_FILE_CASES.items():
+        value=yaml.safe_load(request(config,'/api/file/'+name,raw=True,user_agent=ua))
+        check_profile(value)
+        wanted=full['proxies']
+        if key!='file-stash-mac-modern':wanted=[n for n in wanted if n.get('network')!='xhttp' and not (n['type']=='vless' and n.get('encryption') not in (None,'','none'))]
+        if value['proxies']!=wanted or any(value[k]!=full[k] for k in ('dns','rules','rule-providers')):
+            raise ValueError('Stash 文件输出丢失节点参数、DNS 或规则：'+key)
+        rendered[key]=digest(value)
+    return rendered
+
 
 def check_profile(value):
     if not isinstance(value,dict) or not all(k in value for k in ('proxies','proxy-groups','rules')):raise ValueError('Sub-Store 未生成完整配置，处理器可能报错')
@@ -211,9 +232,12 @@ def publish(config):
             if get(config,item['kind'],item['name'])!=item['after']:raise ValueError('发布回读不一致')
         import yaml
         for fmt in ['clash','stash']:
-            value=yaml.safe_load(request(config,'/api/file/'+fmt,raw=True))
+            value=yaml.safe_load(request(config,'/api/file/'+fmt,raw=True,**({'user_agent':'Stash/3.6.0'} if fmt=='stash' else {})))
             check_profile(value)
             if digest(value)!=plan['rendered_sha256'][fmt]:raise ValueError('线上输出与已校验计划不符')
+            if fmt=='stash':
+                for key,sha in check_stash_file_cases(config,fmt,value).items():
+                    if sha!=plan['rendered_sha256'][key]:raise ValueError('Stash 文件输出与已校验计划不符：'+key)
         if digest(request(config,'/api/file/shadowrocket-config',raw=True))!=plan['rendered_sha256']['shadowrocket-config']:
             raise ValueError('Shadowrocket 策略与已校验计划不符')
         for key,(target,ua) in DOWNLOAD_CASES.items():

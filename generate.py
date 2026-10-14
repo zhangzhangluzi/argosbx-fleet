@@ -6,6 +6,7 @@ from storage import save
 from protocols import LABELS, IDS, node_label, protocol_type, families as node_families
 from dns_policy import harden_config, harden_shadowrocket
 root=pathlib.Path(__file__).parent
+stash_compat=(root/'stash-compat.js').read_text()
 inventory=active_config(globals().get('inventory_override') or read())
 node_hosts=host_map(inventory)
 specs={s['id']:s for s in inventory['servers']}
@@ -51,6 +52,8 @@ for fmt in ('clash','stash'):
 }'''.replace('COUNTRY_PREFIXES',json.dumps(country_prefixes,ensure_ascii=False)).replace('PURPOSE_GROUPS',json.dumps(purpose_groups,ensure_ascii=False)).replace('BASE',json.dumps(base,ensure_ascii=False)).replace('HEALTHCHECK',json.dumps(health,ensure_ascii=False)).replace('CONVERSION',"ProxyUtils.produce(ProxyUtils.parse(ProxyUtils.yaml.safeDump(source)), 'Stash', 'internal')" if fmt=='stash' else 'source.proxies')
     if fmt == 'clash':
         script = (root/'ech-policy.js').read_text().replace('CF_HOSTS',json.dumps(list(dict.fromkeys([s['domains']['cf'] for s in specs.values() if s['domains']['cf']]+[p['sni'] for s in specs.values() for i,p in s.get('protocols',{}).items() if protocol_type(i,p) in ('cf','xhttp') and p['enabled']])))) + '\n' + script.replace('const proxies=source.proxies;', 'const proxies=applyCfEch(source.proxies);')
+    if fmt == 'stash':
+        script=stash_compat+'\n'+script.replace('const proxies=', 'const converted=',1).replace(' const config=',' const proxies=stashCompatibleProxies(converted,input.$options?._req);\n input.$options ??= {};\n input.$options._res ??= {};\n input.$options._res.headers=stashResponseHeaders(input.$options._res.headers);\n const config=',1)
     files.append({'name':fmt,'displayName':'ArgoSBX · '+fmt,'type':'mihomoConfig','sourceType':'collection','sourceName':'all','process':[{'type':'Script Operator','args':{'mode':'script','content':script}}]})
 # Shadowrocket configuration keeps the accepted DNS, Play and Telegram rules.
 sr=harden_shadowrocket((root/'templates'/'base-shadowrocket.conf').read_text(),hosts=node_hosts)
@@ -79,6 +82,7 @@ files.append({'name':'shadowrocket-config','displayName':'Shadowrocket 自动策
 payload={'subscriptions':subscriptions,'collections':[{'name':'all','displayName':' · '.join(countries.values()),'subscriptions':[s['subscription']['name'] for s in specs.values()],'process':[]}],'files':files}
 payload['collections'] += [{'name':'shadowrocket-'+code.lower(),'displayName':'ArgoSBX · '+label,'subscriptions':[s['subscription']['name'] for s in specs.values() if s['country']==code],'process':[]} for code,label in countries.items()]
 export_processor={'type':'Response Transformer','customName':'FlClash / Stash 完整配置导出','args':{'mode':'script','content':(root/'flclash-response-transformer.js').read_text().replace('CF_HOSTS',json.dumps(list(dict.fromkeys([s['domains']['cf'] for s in specs.values() if s['domains']['cf']]+[p['sni'] for s in specs.values() for i,p in s.get('protocols',{}).items() if protocol_type(i,p) in ('cf','xhttp') and p['enabled']])))).replace('PROFILE_TITLES',json.dumps({'all':'ArgoSBX '+'-'.join(countries),**{'shadowrocket-'+code.lower():'ArgoSBX '+code for code in countries},**{s['subscription']['name']:'ArgoSBX '+s['name'] for s in specs.values()}},ensure_ascii=False)),'arguments':{'profile':'clash','stash_profile':'stash'}}}
+export_processor['args']['content']=stash_compat+'\n'+export_processor['args']['content']
 for item in payload['subscriptions']+payload['collections']:
     item['process'].append(export_processor)
 from fleet import STATE

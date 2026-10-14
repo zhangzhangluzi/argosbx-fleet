@@ -3,7 +3,7 @@
 import argparse,hashlib,io,json,tarfile
 from pathlib import Path
 ROOT=Path(__file__).resolve().parent
-FILES=['xhttp.py','routing_policy.py','ech.py','country_routes.py','probe.py','acceptance.py','listeners.py','inbounds.py','bootstrap.py','onboard.py','tunnels.py','binaries.json','lease.py','agent.py','domains.py','dns_policy.py','fleet.py','fleetctl.py','generate.py','publication.py','protocols.py','servers.py','storage.py','release.py','install.py','README.md','LICENSE','versions.json','ech-policy.js','region-processor.js','flclash-response-transformer.js']
+FILES=['stash-compat.js','xhttp.py','routing_policy.py','ech.py','country_routes.py','probe.py','acceptance.py','listeners.py','inbounds.py','bootstrap.py','onboard.py','tunnels.py','binaries.json','lease.py','agent.py','domains.py','dns_policy.py','fleet.py','fleetctl.py','generate.py','publication.py','protocols.py','servers.py','storage.py','release.py','install.py','README.md','LICENSE','versions.json','ech-policy.js','region-processor.js','flclash-response-transformer.js']
 
 def package(destination):
     manifest=json.loads((ROOT/'versions.json').read_text());files=FILES+[str(p.relative_to(ROOT)) for p in sorted((ROOT/'templates').glob('*'))]

@@ -46,18 +46,8 @@ async function transformFunction(res, context) {
   if (!Array.isArray(source?.proxies) || !source.proxies.length) {
     throw new Error('Client export contains no usable proxies');
   }
-  if (isStash) {
-    // XHTTP and VLESS Encryption require iOS/tvOS 3.6 or macOS 4.3.
-    // A versionless request uses the 3.4-compatible fleet subset. Never turn
-    // an encrypted XHTTP node into an invalid plaintext VLESS node.
-    const version = ua.match(/\bstash(?:[\s_-]?mac)?[\/\s]+(\d+)\.(\d+)(?:\.(\d+))?/);
-    const mac = /stash[\s_-]?mac|macos|mac os x/.test(ua) || (version && Number(version[1]) >= 4 && !/iphone|ipad|ios|tvos/.test(ua));
-    const minimum = mac ? [4, 3] : [3, 6];
-    const modern = version && (Number(version[1]) > minimum[0] || Number(version[1]) === minimum[0] && Number(version[2]) >= minimum[1]);
-    if (!modern) source.proxies = source.proxies.filter(p =>
-      p.network !== 'xhttp' && !(p.type === 'vless' && p.encryption && p.encryption !== 'none'));
-    if (!source.proxies.length) throw new Error('No proxies compatible with this Stash version');
-  }
+  // Also protect downloads while an older file processor is being upgraded.
+  if (isStash) source.proxies = stashCompatibleProxies(source.proxies, req);
   const profileName = isStash ? ($arguments.stash_profile || 'stash') : ($arguments.profile || 'clash');
   const profile = ($substore.read('files') || []).find(f => f.name === profileName);
   if (!profile || profile.type !== 'mihomoConfig') throw new Error('Complete client profile is missing');
@@ -67,6 +57,7 @@ async function transformFunction(res, context) {
     type: 'file',
     file: {...profile, sourceType: 'local', source: 'local', mode: 'text', mergeSources: undefined},
     content: ProxyUtils.yaml.safeDump({proxies: source.proxies}),
+    $options: {_req: req},
     noFlow: true,
   });
   const config = ProxyUtils.yaml.safeLoad(body);
@@ -79,14 +70,7 @@ async function transformFunction(res, context) {
   };
   setTitle(`ArgoSBX-${suffix}-${isStash ? 'Stash' : 'FlClash'}.yaml`);
   if (isStash) {
-    // Format/version depends on UA even when target=Stash is explicit.
-    const vary = Object.entries(res.headers).filter(([k]) => k.toLowerCase() === 'vary')
-      .flatMap(([,v]) => String(v).split(',').map(s => s.trim())).filter(Boolean);
-    for (const key of Object.keys(res.headers)) {
-      if (['cache-control','vary'].includes(key.toLowerCase())) delete res.headers[key];
-    }
-    res.headers['cache-control'] = 'private, no-store';
-    res.headers.vary = [...new Set([...vary, 'User-Agent'])].join(', ');
+    res.headers = stashResponseHeaders(res.headers);
   }
   for (const key of Object.keys(res.headers)) if (key.toLowerCase() === 'content-length') delete res.headers[key];
   return res;

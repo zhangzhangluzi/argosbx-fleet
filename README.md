@@ -20,9 +20,9 @@ flowchart LR
 从 GitHub Release 下载版本包和 SHA256SUMS，核验后运行：
 ```sh
 sha256sum -c SHA256SUMS
-python3 install.py argosbx-fleet-v1.2.2.tar.gz --sha256 <已核对的SHA256>
+python3 install.py argosbx-fleet-v1.2.5.tar.gz --sha256 <已核对的SHA256>
 ```
-安装到 `/opt/argosbx-fleet/v1.2.2`，原子更新 `current` 符号链接。同一版本内容不可覆盖。升级使用相同命令；数据与凭据不在发布包内。
+安装到 `/opt/argosbx-fleet/v1.2.5`，原子更新 `current` 符号链接。同一版本内容不可覆盖。升级使用相同命令；数据与凭据不在发布包内。
 ## 配置入口
 复制 `templates/servers.example.json` 到私有路径，设置权限 0600；通过 `ARGOSBX_SERVERS_FILE` 指定。`ARGOSBX_WORKSPACE` 用于解析相对 SSH 路径；`ARGOSBX_STATE` 为计划和恢复日志目录。设置 `coordinator` 为运行 Sub-Store 的服务器 ID，使用该机原生 `flock` 排除跨工作站同时发布。每次 Sub-Store 请求前后检查锁连接；检测到连接断开就停止写入并保留恢复日志。它不提供服务端数据库 fencing，已在途的请求仍须回读确认。
 初次接管现有安装：向各 VPS `agent.py adopt` 标准输入传递 `{server_id, services}`；services 是原生配置完整路径到 systemd unit 的映射。程序读取实际端口、TLS 参数、凭据和源节点，校验两个内核并确认接管前后正式节点等价，再保存 `/etc/argosbx-fleet/server.json`。同类协议存在多个入站时拒绝自动猜测；需要先明确映射。
@@ -38,9 +38,9 @@ python3 servers.py publish
 ## 发布与恢复
 `servers.py plan` 创建随机命名的临时 Sub-Store 对象，使用原生转换器校验 Clash、Stash 和 Shadowrocket 分组，随后删除。`publish` 检查输入和每个线上对象未被修改，记录写前日志后更新并回读原统一地址。它是可恢复的多对象发布，不是 Sub-Store 数据库级原子事务。
 
-Sub-Store 的 `/download/collection/all` 和单服务器导出会按客户端返回完整配置：FlClash 使用 Clash 模板，Stash 使用独立 Stash 模板，包含分组、分流、DNS 与去广告。可以用 `target=Stash` 明确指定格式，URL 路径中的目标优先于查询参数和 User-Agent。Stash 请求会根据版本决定是否包含 XHTTP／VLESS Encryption（iOS/tvOS ≥ 3.6、macOS ≥ 4.3）；旧版或无法识别版本时，使用不含这类节点的 3.4 兼容集合，其余节点及规则保留，国家组随实际节点重建。服务端不会移除协议入口，也不会改写加密凭据。版本依据为 [Stash 官方协议说明](https://stash.wiki/proxy-protocols/proxy-types#xhttp)。`/api/file/stash` 仍是包含全部协议的规范模板，直接使用它需要支持全部节点的版本。
+Sub-Store 的 `/download/collection/all` 和单服务器导出会按客户端返回完整配置：FlClash 使用 Clash 模板，Stash 使用独立 Stash 模板，包含分组、分流、DNS 与去广告。可以用 `target=Stash` 明确指定格式，URL 路径中的目标优先于查询参数和 User-Agent。Stash 请求会根据版本决定是否包含 XHTTP／VLESS Encryption（iOS/tvOS ≥ 3.6、macOS ≥ 4.3）；旧版或无法识别版本时，使用不含这类节点的 3.4 兼容集合，其余节点及规则保留，国家组随实际节点重建。服务端不会移除协议入口，也不会改写加密凭据。版本依据为 [Stash 官方协议说明](https://stash.wiki/proxy-protocols/proxy-types#xhttp)。`/api/file/stash` 使用同一版本兼容逻辑，无需更换原地址；直接文件请求及通用下载均按原始客户端 User-Agent 生成配置。旧版或无法识别版本时过滤 XHTTP／VLESS Encryption，支持的版本保留完整字段。分组在过滤后重建，文件响应设置 YAML 类型、`Vary: User-Agent` 和 `Cache-Control: private, no-store`，避免不同版本混用缓存。
 
-发布校验同时覆盖规范模板和实际下载地址，检查 Stash 兼容集合、现代 Stash 全节点配置及 FlClash 输出。不能用 Mihomo 解析成功代替 iPhone Stash 真机验收。
+发布前后同时校验文件地址和通用下载地址，覆盖 iOS、macOS、新旧版本与无版本请求，检查 Stash 兼容集合、现代 Stash 全节点配置及 FlClash 输出。不能用 Mihomo 解析成功代替 iPhone Stash 真机验收。
 进程或网络中断后运行 `servers.py recover`，按线上内容恢复本次写入并清理临时对象。恢复前先核对所有待恢复对象，遇到第三方修改保留日志并拒绝开始覆盖。临时对象按资源清单核对存在性，已删除、未创建或删除响应丢失均可重复恢复，清理进度逐项落盘。日志0600、原子替换并 fsync；成功后删除，不长期累计备份。不要绕过工具在发布期间编辑同一 Sub-Store 对象。
 服务器端未完成的协议事务由 `fleetctl.py protocol-recover --server jp` 恢复；已尝试重启过的服务在恢复时也会重启，未重启过的事务不会触发服务重启。恢复命令也默认拒绝重启，只有明确指定 `--allow-restart` 才会恢复已重启的服务；恢复前统一核对原生文件、登记状态和订阅源，存在外部修改时整次停止。恢复同时还原源文件和读取权限，清除过期计划；未恢复事务会阻止定时导出和发布。
 ## 域名迁移

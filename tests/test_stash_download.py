@@ -25,10 +25,10 @@ const ProxyUtils={yaml:{safeLoad:JSON.parse,safeDump:JSON.stringify},
 const $substore={read:()=>FILES};
 const $options={_req:REQUEST};const $arguments=ARGS;
 let usedProfile;
-async function produceArtifact({file,content}) {
+async function produceArtifact({file,content,$options}) {
  usedProfile=file.name;
  const operator=new Function('ProxyUtils',file.process[0].args.content+'; return operator;')(ProxyUtils);
- return operator({$content:content}).$content;
+ return operator({$content:content,$options}).$content;
 }
 SCRIPT
 (async()=>{try {
@@ -85,5 +85,56 @@ SCRIPT
         request={'query':{'target':'Stash'}}
         self.assertIn('error',self.render(request,files=[]))
         self.assertIn('error',self.render(request,nodes=[self.nodes[1]]))
+
+    def render_file(self,request,nodes=None):
+        op=next(f for f in self.payload['files'] if f['name']=='stash')['process'][0]['args']['content']
+        script='''
+const ProxyUtils={yaml:{safeLoad:JSON.parse,safeDump:JSON.stringify},
+ parse:body=>JSON.parse(body).proxies,
+ produce:(nodes)=>nodes.map(n=>{n=structuredClone(n);if(n.type==='hysteria2'){n.auth=n.password;delete n.password;}return n;})};
+SCRIPT
+try {const input={$content:JSON.stringify({proxies:NODES}),$options:{_req:REQUEST,_res:{headers:{Vary:'Origin','Cache-Control':'public','Content-Length':'1'}}}};
+ const output=operator(input);console.log(JSON.stringify(output));
+}catch(error){console.log(JSON.stringify({error:error.message}));}
+'''.replace('SCRIPT',op).replace('REQUEST',json.dumps(request)).replace('NODES',json.dumps(self.nodes if nodes is None else nodes))
+        return json.loads(subprocess.check_output(['node','-e',script],text=True))
+
+    def test_direct_file_matches_download_for_all_client_versions(self):
+        for ua in ['Stash/3.4.0','Stash/3.6.2','StashMac/4.2.0','StashMac/4.3.0','Stash','Mozilla/5.0','']:
+            with self.subTest(ua=ua):
+                req={'query':{'target':'Stash'},'headers':{'User-Agent':ua}}
+                file=self.render_file(req);download=self.render(req)
+                self.assertNotIn('error',file)
+                self.assertEqual(json.loads(file['$content']),json.loads(download['result']['body']))
+                headers=file['$options']['_res']['headers']
+                self.assertEqual(headers['cache-control'],'private, no-store')
+                self.assertEqual(headers['vary'],'Origin, User-Agent')
+                self.assertEqual(headers['content-type'],'text/yaml; charset=utf-8')
+                self.assertNotIn('Content-Length',headers)
+
+    def test_file_identity_cannot_be_overridden_to_skip_compatibility(self):
+        output=self.render_file({'query':{'target':'ClashMeta'},'headers':{'user-agent':'FlClash/1'}})
+        value=json.loads(output['$content']);servers.check_profile(value)
+        self.assertEqual(len(value['proxies']),1)
+        self.assertIn('auth',value['proxies'][0]);self.assertNotIn('password',value['proxies'][0])
+
+    def test_file_filters_encryption_on_non_xhttp_and_removes_empty_country(self):
+        from copy import deepcopy
+        nodes=deepcopy(self.nodes)
+        nodes[1].update(name='TW-T-Encrypted',network='tcp')
+        output=self.render_file({'headers':{'user-agent':'Stash/3.4.0'}},nodes)
+        value=json.loads(output['$content']);servers.check_profile(value)
+        self.assertEqual([n['name'] for n in value['proxies']],[nodes[0]['name']])
+        self.assertNotIn('TW-T-Encrypted',output['$content'])
+
+    def test_file_refuses_an_empty_compatible_subset(self):
+        self.assertIn('error',self.render_file({},[self.nodes[1]]))
+
+    def test_download_remains_compatible_during_file_processor_upgrade(self):
+        from copy import deepcopy
+        files=deepcopy(self.payload['files'])
+        op=next(f for f in files if f['name']=='stash')['process'][0]['args']
+        op['content']=op['content'].replace('stashCompatibleProxies(converted,input.$options?._req)','converted')
+        self.check(self.render({'headers':{'user-agent':'Stash/3.4.0'}},files=files),1)
 
 if __name__=='__main__':unittest.main()

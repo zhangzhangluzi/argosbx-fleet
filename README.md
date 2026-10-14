@@ -96,7 +96,7 @@ python3 servers.py publish
 `ads.applovin.com`、`ads.tiktok.com` 精确匹配到日常线路，优先于去广告规则；不放行整个 AppLovin/TikTok 域名树。Clash、Stash、Shadowrocket 同步生成，前两者同步显式 DNS 策略。
 
 ## 去广告与投放后台例外
-Clash/FlClash、Stash 使用 MetaCubeX `category-ads-all.mrs` 域名表，每 86400 秒更新。规则从上到下首次匹配：精确后台例外优先；命中广告表后交给“去广告”选择组，Clash 开启执行 REJECT，关闭执行 PASS，继续匹配后续应用和国内外规则。Stash 默认开启，使用原生覆写 `templates/stash-adblock-off.stoverride` 关闭；启用覆写只将广告匹配开关设为 False，停用即恢复，不覆盖整段规则、不发出 PASS。发布后可从原 Sub-Store 的 `/api/file/stash-adblock-off.stoverride` 安装。例外和 DNS 策略由 `dns_policy.py` 一处生成，保持发布与导出一致。Shadowrocket 默认开启同源广告域名集：Sub-Store 将 `+.` 后缀转换为原生 `.` 格式，保留精确后台例外，避免引入更大、不同口径的广告表。
+Clash/FlClash、Stash 使用 MetaCubeX `category-ads-all.mrs` 域名表，每 86400 秒更新。规则从上到下首次匹配：精确后台例外优先；命中广告表后交给“去广告”选择组，Clash 开启执行 REJECT，关闭执行 PASS，继续匹配后续应用和国内外规则。Stash 原订阅内同样提供“开启去广告／关闭去广告”分组，默认开启执行 REJECT；关闭后命中广告表的请求跟随日常线路，不再继续后面的国内外分流。这是两端明确的行为差异；Stash 不发出 PASS，也不需要单独安装覆写。其余请求和精确后台例外仍按原规则处理。例外和 DNS 策略由 `dns_policy.py` 一处生成，保持发布与导出一致。Shadowrocket 默认开启同源广告域名集：Sub-Store 将 `+.` 后缀转换为原生 `.` 格式，保留精确后台例外，避免引入更大、不同口径的广告表。
 2026-10-13 对常见投放后台的公开入口、重定向和界面资源核查后，增加以下精确 DIRECT 例外及国内 DoH，不放行平台父域名：
 - `e.qq.com`、`ad.qq.com`：腾讯营销入口、投放平台与同源资源。
 - `ad.e.kuaishou.com`、`ad-m.e.kuaishou.com`：磁力智投电脑和手机版后台。

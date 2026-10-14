@@ -123,12 +123,9 @@ def stage(config, payload):
             if source['name']=='shadowrocket-config': continue
             f=copy.deepcopy(source);f['name']=prefix+'-'+source['name'];f['sourceName']=prefix
             creating('file',f['name']);request(config,'/api/files',f,'POST')
-            if source['name'] in ('stash-adblock-off.stoverride','shadowrocket-ads'):
+            if source['name']=='shadowrocket-ads':
                 raw=request(config,'/api/file/'+f['name'],raw=True)
-                if source['name']=='stash-adblock-off.stoverride':
-                    if raw!=source['content']:raise ValueError('Stash 去广告覆写与生成内容不一致')
-                    check_stash_override(raw)
-                else:check_sr_ads(raw)
+                check_sr_ads(raw)
                 rendered[source['name']]=digest(raw)
                 continue
             value=yaml.safe_load(request(config,'/api/file/'+f['name'],raw=True,**({'user_agent':'Stash/3.6.0'} if source['name']=='stash' else {})))
@@ -162,7 +159,7 @@ def stage(config, payload):
                 wanted=full['proxies']
                 if key=='download-stash':wanted=[n for n in wanted if n.get('network')!='xhttp' and not (n['type']=='vless' and n.get('encryption') not in (None,'','none'))]
                 expected_profile=stash_expected_profile(full,key!='download-stash') if target=='Stash' else full
-                if value['proxies']!=wanted or any(value[k]!=expected_profile[k] for k in ('dns','rules','rule-providers','script') if k in expected_profile):
+                if value['proxies']!=wanted or any(value.get(k)!=expected_profile.get(k) for k in ('dns','rules','rule-providers','script')):
                     raise ValueError('客户端导出丢失节点参数、DNS 或规则：'+key)
                 rendered[key]=digest(value)
         for country in payload['collections'][1:]:
@@ -203,7 +200,7 @@ def check_stash_file_cases(config,name,full):
         wanted=full['proxies']
         if key!='file-stash-mac-modern':wanted=[n for n in wanted if n.get('network')!='xhttp' and not (n['type']=='vless' and n.get('encryption') not in (None,'','none'))]
         expected=stash_expected_profile(full,key=='file-stash-mac-modern')
-        if value['proxies']!=wanted or any(value[k]!=expected[k] for k in ('dns','rules','rule-providers','script')):
+        if value['proxies']!=wanted or any(value.get(k)!=expected.get(k) for k in ('dns','rules','rule-providers','script')):
             raise ValueError('Stash 文件输出丢失节点参数、DNS 或规则：'+key)
         rendered[key]=digest(value)
     return rendered
@@ -215,13 +212,6 @@ def stash_expected_profile(full,modern):
         policy=expected['dns']['nameserver-policy']
         policy['geosite:cn']=policy.pop('rule-set:国内域名')
     return expected
-
-
-def check_stash_override(raw):
-    import yaml
-    value=yaml.safe_load(raw)
-    if value.get('script')!={'shortcuts':{'fleet-adblock-enabled':'False'}} or set(value)-{'name','desc','script'}:
-        raise ValueError('去广告覆写必须仅关闭广告规则，不得替换分流规则')
 
 
 def check_sr_ads(raw):
@@ -273,9 +263,6 @@ def publish(config):
                     if sha!=plan['rendered_sha256'][key]:raise ValueError('Stash 文件输出与已校验计划不符：'+key)
         if digest(request(config,'/api/file/shadowrocket-config',raw=True))!=plan['rendered_sha256']['shadowrocket-config']:
             raise ValueError('Shadowrocket 策略与已校验计划不符')
-        if 'stash-adblock-off.stoverride' in plan['rendered_sha256']:
-            raw=request(config,'/api/file/stash-adblock-off.stoverride',raw=True);check_stash_override(raw)
-            if digest(raw)!=plan['rendered_sha256']['stash-adblock-off.stoverride']:raise ValueError('Stash 去广告覆写与已校验计划不符')
         if 'shadowrocket-ads' in plan['rendered_sha256']:
             raw=request(config,'/api/file/shadowrocket-ads',raw=True);check_sr_ads(raw)
             if digest(raw)!=plan['rendered_sha256']['shadowrocket-ads']:raise ValueError('广告域名集已更新，请重新 plan')

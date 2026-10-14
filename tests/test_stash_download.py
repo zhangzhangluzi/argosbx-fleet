@@ -43,7 +43,7 @@ SCRIPT
         value=json.loads(result['result']['body']);servers.check_profile(value)
         self.assertEqual(len(value['proxies']),count)
         self.assertEqual(value['mode'],'rule');self.assertIn('dns',value)
-        self.assertTrue('去广告' in [g['name'] for g in value['proxy-groups']] or value.get('script',{}).get('shortcuts',{}).get('fleet-adblock-enabled')=='True')
+        self.assertIn('去广告',[g['name'] for g in value['proxy-groups']])
         self.assertIn('content-type',result['result']['headers']);self.assertNotIn('Content-Length',result['result']['headers'])
         return value
 
@@ -151,23 +151,31 @@ try {const input={$content:JSON.stringify({proxies:NODES}),$options:{_req:REQUES
     def test_file_refuses_an_empty_compatible_subset(self):
         self.assertIn('error',self.render_file({},[self.nodes[1]]))
 
-    def test_stash_dns_capabilities_and_ad_override(self):
+    def test_stash_dns_capabilities_and_inline_ad_switch(self):
         for ua,modern in [('Stash/3.6.2',True),('StashMac/4.3.0',True),('Stash/3.4.0',False),('Stash',False)]:
             value=json.loads(self.render_file({'headers':{'User-Agent':ua}})['$content'])
             policy=value['dns']['nameserver-policy']
             self.assertIn('rule-set:国内域名' if modern else 'geosite:cn',policy)
             self.assertNotIn('geosite:cn' if modern else 'rule-set:国内域名',policy)
-            self.assertEqual(value['script']['shortcuts']['fleet-adblock-enabled'],'True')
-            self.assertIn('AND,((RULE-SET,广告域名),(SCRIPT,fleet-adblock-enabled)),REJECT',value['rules'])
-            self.assertFalse(any('去广告' in g['name'] or 'PASS' in g['proxies'] for g in value['proxy-groups']))
-        raw=next(f['content'] for f in self.payload['files'] if f['name']=='stash-adblock-off.stoverride')
-        servers.check_stash_override(raw)
-        import yaml
-        override=yaml.safe_load(raw)
-        # Native recursive map merge disables only this shortcut, leaving the
-        # rule sequence and the provider intact, including future updates.
-        value['script']['shortcuts'].update(override['script']['shortcuts'])
-        self.assertEqual(value['script']['shortcuts']['fleet-adblock-enabled'],'False')
+            self.assertNotIn('fleet-adblock-enabled',value.get('script',{}).get('shortcuts',{}))
+            self.assertIn('RULE-SET,广告域名,去广告',value['rules'])
+            groups={g['name']:g for g in value['proxy-groups']}
+            self.assertEqual(groups['去广告']['proxies'],['开启去广告','关闭去广告'])
+            self.assertEqual(groups['开启去广告']['proxies'],['REJECT'])
+            self.assertEqual(groups['关闭去广告']['proxies'],['日常线路'])
+            self.assertFalse(any('PASS' in g['proxies'] for g in groups.values()))
+            # An installed legacy override must no longer control ad matching.
+            self.assertFalse(any('fleet-adblock-enabled' in rule for rule in value['rules']))
+        self.assertFalse(any(f['name'].endswith('.stoverride') for f in self.payload['files']))
+
+    def test_stash_ad_switch_preserves_other_groups_rules_and_exceptions(self):
+        value=json.loads(self.render_file({'headers':{'User-Agent':'Stash/3.6.2'}})['$content'])
+        ad=value['rules'].index('RULE-SET,广告域名,去广告')
+        self.assertLess(value['rules'].index('DOMAIN,ads.applovin.com,日常线路'),ad)
+        self.assertLess(value['rules'].index('DOMAIN,ads.tiktok.com,日常线路'),ad)
+        self.assertIn('RULE-SET,国内域名,DIRECT',value['rules'][ad+1:])
+        self.assertIn('RULE-SET,国内IP,DIRECT',value['rules'][ad+1:])
+        self.assertEqual(value['rules'][-1],'MATCH,日常线路')
 
     def test_clash_off_passes_and_stash_validator_refuses_pass(self):
         value=self.check(self.render({'headers':{'User-Agent':'FlClash/1'}}),2)

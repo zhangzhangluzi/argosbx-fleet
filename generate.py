@@ -24,9 +24,6 @@ for fmt in ('clash','stash'):
     base['rules']=[r.replace(',UDP线路', ',日常线路') for r in base['rules']]
     base=harden_config(base,fmt,hosts=node_hosts,tailscale=inventory.get('tailscale'))
     health={'url':'https://www.gstatic.com/generate_204','interval':inventory.get('health',{}).get('interval',900),'tolerance':inventory.get('health',{}).get('tolerance',100),'lazy':True}
-    if fmt == 'stash':
-        base['rules']=[r.replace('RULE-SET,广告域名,去广告', 'AND,((RULE-SET,广告域名),(SCRIPT,fleet-adblock-enabled)),REJECT') for r in base['rules']]
-        base.setdefault('script',{}).setdefault('shortcuts',{})['fleet-adblock-enabled']='True'
     if fmt == 'clash':
         base['unified-delay']=True
         health.update({'timeout':8000,'max-failed-times':3,'expected-status':'204'})
@@ -56,7 +53,10 @@ for fmt in ('clash','stash'):
     if fmt == 'clash':
         script = (root/'ech-policy.js').read_text().replace('CF_HOSTS',json.dumps(list(dict.fromkeys([s['domains']['cf'] for s in specs.values() if s['domains']['cf']]+[p['sni'] for s in specs.values() for i,p in s.get('protocols',{}).items() if protocol_type(i,p) in ('cf','xhttp') and p['enabled']])))) + '\n' + script.replace('const proxies=source.proxies;', 'const proxies=applyCfEch(source.proxies);')
     if fmt == 'stash':
-        script=script.replace(" for(const g of config['proxy-groups'])", " config['proxy-groups']=config['proxy-groups'].filter(g=>!['去广告','开启去广告','关闭去广告'].includes(g.name));\n stashCompatibleConfig(config,input.$options?._req);\n for(const g of config['proxy-groups'])",1)
+        # Stash does not use Mihomo's PASS. Off explicitly follows the user's
+        # daily route; all ad-block controls travel in the main subscription.
+        script=script.replace("proxies:['PASS']", "proxies:['日常线路']")
+        script=script.replace(" for(const g of config['proxy-groups'])", " stashCompatibleConfig(config,input.$options?._req);\n for(const g of config['proxy-groups'])",1)
         # Only country url-test groups own the timer. Stash otherwise recursively
         # tests select groups every 600 seconds, ignoring the configured cadence.
         script=script.replace("for(const g of config['proxy-groups'])if(!g.proxies.length)", "for(const g of config['proxy-groups'])if(g.type==='select')g.interval=-1;\n for(const g of config['proxy-groups'])if(!g.proxies.length)")
@@ -86,7 +86,6 @@ for code,label in countries.items():
 sr=sr[:start]+'\n'.join(groups)+'\n'+sr[end:]
 sr=sr.replace('PROTOCOL,UDP,UDP线路', 'PROTOCOL,UDP,日常线路')
 files.append({'name':'shadowrocket-config','displayName':'Shadowrocket 自动策略','source':'local','content':sr,'process':[]})
-files.insert(0,{'name':'stash-adblock-off.stoverride','displayName':'Stash · 关闭去广告覆写','source':'local','content':(root/'templates/stash-adblock-off.stoverride').read_text(),'process':[]})
 files.insert(0,{'name':'shadowrocket-ads','displayName':'Shadowrocket · 广告域名集','source':'remote','url':'https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/geosite/category-ads-all.list','process':[{'type':'Script Operator','args':{'mode':'script','content':(root/'templates/shadowrocket-ads.js').read_text()}}]})
 payload={'subscriptions':subscriptions,'collections':[{'name':'all','displayName':' · '.join(countries.values()),'subscriptions':[s['subscription']['name'] for s in specs.values()],'process':[]}],'files':files}
 payload['collections'] += [{'name':'shadowrocket-'+code.lower(),'displayName':'ArgoSBX · '+label,'subscriptions':[s['subscription']['name'] for s in specs.values() if s['country']==code],'process':[]} for code,label in countries.items()]

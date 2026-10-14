@@ -56,6 +56,8 @@ python3 fleetctl.py domain-commit --server jp
 ## 分流与测速
 继续使用 [MetaCubeX/meta-rules-dat](https://github.com/MetaCubeX/meta-rules-dat) 国内域名/IP 与广告集合，日更且使用客户端缓存。优先保留 Google Play、AI、Telegram 例外；飞书业务/静态资源显式直连。Clash 的国内 DNS 跟随相同国内规则集，Stash 使用原生 geosite:cn 策略；国内走 AliDNS HTTPS，国外走代理上的 Cloudflare HTTPS。禁用明文 DNS 回退，节点解析保留独立启动路径。Shadowrocket 使用对应 ChinaMax DOMAIN-SET；其 DNS 覆写用于直连规则，改用国内 DoH，代理域名仍交给节点解析，保留独立原生格式。参见 [Stash DNS](https://stash.wiki/features/dns-server)、[Mihomo DNS](https://wiki.metacubex.one/config/dns/) 及 [Shadowrocket 配置说明](https://github.com/LOWERTOP/Shadowrocket/wiki#修改dns)。
 `health.interval` 统一支持 900 或 1800 秒，默认 900。日常、AI、Telegram、国家自动组、去广告开关及现有节点名称保留。Clash/FlClash 导出始终是带规则分组的完整配置。
+
+设为 `1800` 可统一每 30 分钟自动测速。Stash 的上层选择组显式关闭独立测速，只由国家自动组执行定时检测，避免其默认 600 秒递归测速覆盖预期间隔；手动测速及国家组自动选择仍可使用。
 UU 远程、向日葵与 ToDesk 的服务域名及其 DNS 显式直连。Clash/FlClash 将这些域名从 Fake-IP 排除，并按进程名前缀匹配主程序、服务和辅助进程，覆盖纯 IP 的 TCP/UDP 中继与 P2P；需要运行在能识别本机进程的客户端上，不能据此保证其他设备经路由器转发的流量。明文 DNS 防护仍优先；Stash/Shadowrocket 仅使用各自兼容的域名规则，不下发 Mihomo 专用进程正则。
 ## 验证
 ```sh

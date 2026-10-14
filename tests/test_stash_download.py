@@ -57,6 +57,26 @@ SCRIPT
         for ua,count in [('Stash/3.4.0',1),('Stash/3.5.9',1),('Stash/3.6.0',2),('Stash/3.10.0',2),('StashMac/4.2.0',1),('StashMac/4.3.0',2),('Stash/4.2.0 Darwin/24',1),('Stash/4.0.0 iPhone',2)]:
             with self.subTest(ua=ua):self.check(self.render({'headers':{'user-agent':ua}}),count)
 
+    def test_configured_health_cadence_has_no_stash_select_timer(self):
+        for interval in (900,1800):
+            config=json.loads((ROOT/'templates/servers.example.json').read_text())
+            config['health']={'interval':interval,'tolerance':100};captured={}
+            with patch('storage.save',side_effect=lambda path,value:captured.update(payload=value)),contextlib.redirect_stdout(io.StringIO()):
+                runpy.run_path(str(ROOT/'generate.py'),init_globals={'inventory_override':config})
+            self.payload=captured['payload']
+            for ua in ('Stash/3.4.0','Stash/3.6.2','FlClash/0.8.99'):
+                value=json.loads(self.render({'headers':{'User-Agent':ua}})['result']['body'])
+                for group in value['proxy-groups']:
+                    if group['type']=='url-test':
+                        self.assertEqual(group['interval'],interval)
+                        self.assertEqual(group['tolerance'],100)
+                    elif ua.startswith('Stash'):
+                        self.assertEqual(group['interval'],-1)
+                    else:self.assertNotIn('interval',group)
+            sr=next(f['content'] for f in self.payload['files'] if f['name']=='shadowrocket-config')
+            for group in sr.splitlines():
+                if '= url-test,' in group:self.assertIn('interval='+str(interval)+',',group)
+
     def test_versionless_explicit_stash_uses_compatible_subset(self):
         for ua in ['Stash','Mozilla/5.0','']:
             with self.subTest(ua=ua):self.check(self.render({'query':{'target':'Stash'},'headers':{'user-agent':ua}}),1)

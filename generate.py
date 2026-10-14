@@ -53,6 +53,9 @@ for fmt in ('clash','stash'):
     if fmt == 'clash':
         script = (root/'ech-policy.js').read_text().replace('CF_HOSTS',json.dumps(list(dict.fromkeys([s['domains']['cf'] for s in specs.values() if s['domains']['cf']]+[p['sni'] for s in specs.values() for i,p in s.get('protocols',{}).items() if protocol_type(i,p) in ('cf','xhttp') and p['enabled']])))) + '\n' + script.replace('const proxies=source.proxies;', 'const proxies=applyCfEch(source.proxies);')
     if fmt == 'stash':
+        # Only country url-test groups own the timer. Stash otherwise recursively
+        # tests select groups every 600 seconds, ignoring the configured cadence.
+        script=script.replace("for(const g of config['proxy-groups'])if(!g.proxies.length)", "for(const g of config['proxy-groups'])if(g.type==='select')g.interval=-1;\n for(const g of config['proxy-groups'])if(!g.proxies.length)")
         script=stash_compat+'\n'+script.replace('const proxies=', 'const converted=',1).replace(' const config=',' const proxies=stashCompatibleProxies(converted,input.$options?._req);\n input.$options ??= {};\n input.$options._res ??= {};\n input.$options._res.headers=stashResponseHeaders(input.$options._res.headers);\n const config=',1)
     files.append({'name':fmt,'displayName':'ArgoSBX · '+fmt,'type':'mihomoConfig','sourceType':'collection','sourceName':'all','process':[{'type':'Script Operator','args':{'mode':'script','content':script}}]})
 # Shadowrocket configuration keeps the accepted DNS, Play and Telegram rules.

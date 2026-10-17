@@ -11,7 +11,7 @@ import dns_policy
 
 ADDED = ('notebooklm.google', 'notebook.google', 'copilot.microsoft.com',
          'copilot.com', 'copilot.cloud.microsoft', 'grok.com', 'grok.x.ai',
-         'accounts.x.ai')
+         'accounts.x.ai', 'api.x.ai', 'console.x.ai')
 
 
 class AiRoutingTests(unittest.TestCase):
@@ -49,5 +49,5 @@ class AiRoutingTests(unittest.TestCase):
                 self.assertTrue(matches('api.'+host), (client, host))
                 self.assertFalse(matches(host+'.unrelated.example'), (client, host))
             for host in ('www.google.com','accounts.google.com','www.microsoft.com',
-                         'login.live.com','www.bing.com','x.com','example.com'):
+                         'login.live.com','www.bing.com','x.com','x.ai','status.x.ai','example.com'):
                 self.assertFalse(matches(host), (client, host))

@@ -1,5 +1,5 @@
 """Shared application routing; no broad platform or login-domain bypasses."""
-AI_DOMAINS = ('chatgpt.com', 'openai.com', 'oaistatic.com', 'oaiusercontent.com', 'claude.ai', 'anthropic.com', 'gemini.google.com', 'aistudio.google.com', 'generativelanguage.googleapis.com', 'notebooklm.google.com', 'notebooklm.google', 'notebook.google', 'copilot.microsoft.com', 'copilot.com', 'copilot.cloud.microsoft', 'grok.com', 'grok.x.ai', 'accounts.x.ai')
+AI_DOMAINS = ('chatgpt.com', 'openai.com', 'oaistatic.com', 'oaiusercontent.com', 'claude.ai', 'anthropic.com', 'gemini.google.com', 'aistudio.google.com', 'generativelanguage.googleapis.com', 'notebooklm.google.com', 'notebooklm.google', 'notebook.google', 'copilot.microsoft.com', 'copilot.com', 'copilot.cloud.microsoft', 'grok.com', 'grok.x.ai', 'accounts.x.ai', 'api.x.ai', 'console.x.ai')
 
 DIAGNOSTIC_DOMAINS = ['browserleaks.com', 'dnsleaktest.com', 'ipleak.net']
 # Small explicit fast path, after purpose/ad rules and before resolving IP rules.

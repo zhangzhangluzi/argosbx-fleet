@@ -1,5 +1,5 @@
 {
-  "version": "v1.2.8",
+  "version": "v1.2.9",
   "python_min": "3.10",
   "dependencies": [
     "PyYAML"
@@ -7,7 +7,7 @@
   "validated_stable": {
     "xray": "26.3.27",
     "sing-box": "1.14.3",
-    "cloudflared": "2026.10.0",
+    "cloudflared": "2026.10.1",
     "sub-store": "2.42.3"
   },
   "updates_proxy_binaries": false

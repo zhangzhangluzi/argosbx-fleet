@@ -90,7 +90,18 @@ SCRIPT
     def test_modern_stash_keeps_encryption_and_xhttp_parameters(self):
         value=self.check(self.render({'headers':{'user-agent':'Stash/3.6.2'}}),2)
         node=next(n for n in value['proxies'] if n.get('network')=='xhttp')
-        self.assertEqual(node,self.nodes[1])
+        self.assertEqual({k:v for k,v in node.items() if not k.startswith('benchmark-')},self.nodes[1])
+
+    def test_stash_native_benchmark_fields_are_seconds_and_client_scoped(self):
+        for ua in ('Stash/3.4.0','Stash/3.6.2','StashMac/4.3.0','Stash'):
+            req={'headers':{'User-Agent':ua}}
+            for output in (json.loads(self.render_file(req)['$content']),
+                           json.loads(self.render(req)['result']['body'])):
+                for node in output['proxies']:
+                    self.assertEqual(node['benchmark-url'],'http://www.gstatic.com/generate_204')
+                    self.assertEqual(node['benchmark-timeout'],8)
+        clash=json.loads(self.render({'headers':{'User-Agent':'FlClash/1'}})['result']['body'])
+        self.assertTrue(all(not any(k.startswith('benchmark-') for k in n) for n in clash['proxies']))
 
     def test_explicit_target_and_route_target_override_user_agent(self):
         r=self.render({'query':{'target':'ClashMeta'},'headers':{'user-agent':'Stash/3.4.0'}})

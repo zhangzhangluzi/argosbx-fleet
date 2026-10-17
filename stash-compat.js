@@ -10,6 +10,12 @@ function stashModern(req = {}) {
 }
 
 function stashCompatibleConfig(config, req = {}) {
+  // Stash benchmarks nodes, not Mihomo's group-level url/timeout fields.
+  // HTTP avoids adding an unrelated TLS handshake to the tunnel health check.
+  for (const node of config.proxies) {
+    node['benchmark-url'] = 'http://www.gstatic.com/generate_204';
+    node['benchmark-timeout'] = 8; // seconds; Mihomo uses milliseconds.
+  }
   if (!stashModern(req)) {
     const policy = config.dns['nameserver-policy'];
     policy['geosite:cn'] = policy['rule-set:国内域名'];

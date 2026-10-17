@@ -20,9 +20,9 @@ flowchart LR
 从 GitHub Release 下载版本包和 SHA256SUMS，核验后运行：
 ```sh
 sha256sum -c SHA256SUMS
-python3 install.py argosbx-fleet-v1.2.5.tar.gz --sha256 <已核对的SHA256>
+python3 install.py argosbx-fleet-v1.2.10.tar.gz --sha256 <已核对的SHA256>
 ```
-安装到 `/opt/argosbx-fleet/v1.2.5`，原子更新 `current` 符号链接。同一版本内容不可覆盖。升级使用相同命令；数据与凭据不在发布包内。
+安装到 `/opt/argosbx-fleet/v1.2.10`，原子更新 `current` 符号链接。同一版本内容不可覆盖。升级使用相同命令；数据与凭据不在发布包内。
 ## 配置入口
 复制 `templates/servers.example.json` 到私有路径，设置权限 0600；通过 `ARGOSBX_SERVERS_FILE` 指定。`ARGOSBX_WORKSPACE` 用于解析相对 SSH 路径；`ARGOSBX_STATE` 为计划和恢复日志目录。设置 `coordinator` 为运行 Sub-Store 的服务器 ID，使用该机原生 `flock` 排除跨工作站同时发布。每次 Sub-Store 请求前后检查锁连接；检测到连接断开就停止写入并保留恢复日志。它不提供服务端数据库 fencing，已在途的请求仍须回读确认。
 初次接管现有安装：向各 VPS `agent.py adopt` 标准输入传递 `{server_id, services}`；services 是原生配置完整路径到 systemd unit 的映射。程序读取实际端口、TLS 参数、凭据和源节点，校验两个内核并确认接管前后正式节点等价，再保存 `/etc/argosbx-fleet/server.json`。同类协议存在多个入站时拒绝自动猜测；需要先明确映射。
@@ -33,7 +33,7 @@ python3 fleetctl.py protocol-apply --server jp
 python3 servers.py plan
 python3 servers.py publish
 ```
-`protocols` 包含 `reality/hy2/cf/anytls/shadowtls/salamander`，各自显式设置 enabled、port、listen；TLS 协议通过 certificate 引用 certificates 中的证书文件。另有 sni、cover_host、cover_port、alpn、ws_path、padding_scheme、client 参数。导出根据协议标识和原生配置读取凭据，不依赖节点数组下标、固定端口、固定 tag。直接编辑 native 文件会触发漂移保护，不会无声发布不一致节点。生成器显式使用本次 inventory；多次生成及域名迁移不会沿用模块导入时的旧域名映射，私有 payload 从创建起即为 0600。schema=2 必须显式填写已登记协议的完整参数和证书绝对路径；不支持的参数会报错，清空 client 选项或 ALPN 后不会从旧模板继承。只部署部分协议的服务器不会生成不存在的 Shadowrocket 节点；整台停用应从汇总配置移除，不能发布空国家组。
+`protocols` 包含 `reality/hy2/cf/anytls/shadowtls/salamander/xhttp`，各自显式设置 enabled、port、listen；TLS 协议通过 certificate 引用 certificates 中的证书文件。另有 sni、cover_host、cover_port、alpn、ws_path、padding_scheme、client 参数。导出根据协议标识和原生配置读取凭据，不依赖节点数组下标、固定端口、固定 tag。直接编辑 native 文件会触发漂移保护，不会无声发布不一致节点。生成器显式使用本次 inventory；多次生成及域名迁移不会沿用模块导入时的旧域名映射，私有 payload 从创建起即为 0600。schema=2 必须显式填写已登记协议的完整参数和证书绝对路径；不支持的参数会报错，清空 client 选项或 ALPN 后不会从旧模板继承。只部署部分协议的服务器不会生成不存在的 Shadowrocket 节点；整台停用应从汇总配置移除，不能发布空国家组。
 启停监听、修改端口等需要原生服务重启；默认拒绝修改。只有明确维护窗口才使用 `protocol-apply --allow-restart`。普通参数计划、订阅调整、导出器升级均不重启代理。`enabled=false` 会从服务端和订阅同时移除该入口；已有凭据保留在私有接管状态中，便于再次启用。
 ## 发布与恢复
 `servers.py plan` 创建随机命名的临时 Sub-Store 对象，使用原生转换器校验 Clash、Stash 和 Shadowrocket 分组，随后删除。`publish` 检查输入和每个线上对象未被修改，记录写前日志后更新并回读原统一地址。它是可恢复的多对象发布，不是 Sub-Store 数据库级原子事务。
@@ -120,7 +120,7 @@ Clash/FlClash、Stash 将这个具体 Tailnet 域名交给本机 MagicDNS `100.1
 这些规则依赖设备实际可访问自己的 Tailnet；不替代 Tailscale 登录，也不能让 iOS 上两个互斥的 VPN 同时运行。未连接 Tailnet 时只影响该私有域名，不设置公共 DNS 回退。参见 [Mihomo no-resolve](https://wiki.metacubex.one/config/rules/#no-resolve)、[Tailscale MagicDNS](https://tailscale.com/docs/features/magicdns) 和 [Stash DNS 策略](https://stash.wiki/features/dns-server)。
 
 ## AI 专用入口补齐
-NotebookLM (`notebooklm.google` 与当前跳转目标 `notebook.google`)、Copilot (`copilot.microsoft.com`、`copilot.com`、`copilot.cloud.microsoft`)、Grok (`grok.com`、`grok.x.ai`、`accounts.x.ai`) 的专用域名和子域名跟随 `AI线路`。Clash / Stash / Shadowrocket 的 AI 规则集保持一致，原 NotebookLM `.google.com` 入口继续保留。仅增加这些专用域名，不将整个 Google、Microsoft、Bing、X 平台或通用账户域名改为 AI 分流；去广告优先级与 DNS 策略保持不变。
+NotebookLM (`notebooklm.google` 与当前跳转目标 `notebook.google`)、Copilot (`copilot.microsoft.com`、`copilot.com`、`copilot.cloud.microsoft`)、Grok (`grok.com`、`grok.x.ai`、`accounts.x.ai`、`api.x.ai`、`console.x.ai`) 的专用域名和子域名跟随 `AI线路`。Clash / Stash / Shadowrocket 的 AI 规则集保持一致，原 NotebookLM `.google.com` 入口继续保留。仅增加这些专用域名，不将整个 Google、Microsoft、Bing、X 平台或通用账户域名改为 AI 分流；去广告优先级与 DNS 策略保持不变。
 验证来源：[NotebookLM 入口及重定向](https://notebooklm.google/)、[Copilot 官方入口](https://copilot.com/)、[Grok 入口与账户说明](https://docs.x.ai/grok/faq)。更改 `AI线路` 只影响新建连接；如果仍选择 `日常线路`，AI 会继续跟随日常选择。
 
 ## v1.2：无中断 XHTTP CF 入口与客户端优化
@@ -158,3 +158,8 @@ XHTTP 的客户端复用配置写在该入站的 `client.reuse-settings`，导�
 - Clash/Stash 国家自动组 `lazy:true`，未使用的组不持续探测，重新使用时按原生机制检测；上层 Stash 选择组 `interval:-1`。`health.interval` 的现有 1800 秒配置保持。Shadowrocket 保留原生 30 分钟 URL 测试，不添加无依据的 lazy 字段。
 - Shadowrocket 仅对登记 Tailnet 的域名使用本地 MagicDNS，精确允许 `100.100.100.100:53`；其他明文 DNS 仍拦截。私有 IPv4/IPv6 走直连；需要设备已连接同一 Tailnet，不能把规则配置等同于建立了 Tailscale 隧道。
 - 订阅内核验证不能替代 iPhone Stash/Shadowrocket 的实际运行验收。
+
+## v1.2.10：完整订阅与 CF 发布检查
+统一文件、通用下载及每个国家的 Clash / 新旧 Stash 导出，逐项核对完整配置，包括分组成员与顺序、默认选择、测速间隔和懒加载；过滤旧版 Stash 不支持的节点后同步移除空国家组。国家 URI 仍校验原内容，原地址、协议及规则不变。规则目标、规则集、DNS 规则集和脚本快捷方式引用也必须存在。
+发布前读取 `argo` 服务及其真实进程。显式配置回环 `--metrics` 时，检查原生 `/ready`；服务停止或该检查失败会阻止发布，不重启连接器，不暴露 metrics 端口。旧安装未显式配置 metrics 时标明 `metrics-not-explicit`，仅确认进程运行，不把未知 readiness 当作已通过。当前三台部署已有回环 metrics，因此执行完整 readiness 检查。CF readiness 只证明连接器已连接边缘，不等同于端到端业务或长期稳定性。
+Stash 每个节点保留原生 `benchmark-url: http://www.gstatic.com/generate_204` 和 `benchmark-timeout: 8`。用户配置的国家组半小时检测与上层选择组禁用重复定时检测保持不变。

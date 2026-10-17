@@ -115,13 +115,13 @@ class InventoryTests(unittest.TestCase):
 
     def test_publish_rejects_stale_inventory_before_network(self):
         with tempfile.TemporaryDirectory() as tmp,patch.object(manager,'PLAN',Path(tmp)/'plan.json'),patch.object(manager,'JOURNAL',Path(tmp)/'journal.json'),patch.object(manager,'get') as get:
-            manager.PLAN.write_text(json.dumps({'inventory_sha256':'old'}))
+            manager.PLAN.write_text(json.dumps({'validation_version':manager.VALIDATION_VERSION,'inventory_sha256':'old'}))
             with self.assertRaises(ValueError):manager.publish(self.config)
             get.assert_not_called()
 
     def test_publish_rolls_back_unknown_patch_result(self):
         old={'name':'clash','content':'before'};new={'name':'clash','content':'after'}
-        plan={'inventory_sha256':manager.digest(self.config),'items':[{'kind':'file','name':'clash','before':old,'after':new}]}
+        plan={'validation_version':manager.VALIDATION_VERSION,'inventory_sha256':manager.digest(self.config),'items':[{'kind':'file','name':'clash','before':old,'after':new}]}
         with tempfile.TemporaryDirectory() as tmp,patch.object(manager,'PLAN',Path(tmp)/'plan.json'),patch.object(manager,'JOURNAL',Path(tmp)/'journal.json'),patch.object(manager,'get',side_effect=[old,old,new,old]),patch.object(manager,'request',side_effect=[TimeoutError(),None]) as request:
             manager.PLAN.write_text(json.dumps(plan))
             with self.assertRaises(TimeoutError):manager.publish(self.config)
@@ -129,7 +129,7 @@ class InventoryTests(unittest.TestCase):
 
     def test_rollback_does_not_overwrite_concurrent_change(self):
         old={'name':'clash','content':'before'};new={'name':'clash','content':'after'}
-        plan={'inventory_sha256':manager.digest(self.config),'items':[{'kind':'file','name':'clash','before':old,'after':new}]}
+        plan={'validation_version':manager.VALIDATION_VERSION,'inventory_sha256':manager.digest(self.config),'items':[{'kind':'file','name':'clash','before':old,'after':new}]}
         with tempfile.TemporaryDirectory() as tmp,patch.object(manager,'PLAN',Path(tmp)/'plan.json'),patch.object(manager,'JOURNAL',Path(tmp)/'journal.json'),patch.object(manager,'get',side_effect=[old,old,{'name':'clash','content':'other'}]),patch.object(manager,'request',side_effect=TimeoutError()) as request:
             manager.PLAN.write_text(json.dumps(plan))
             with self.assertRaises(RuntimeError):manager.publish(self.config)

@@ -17,6 +17,7 @@ from fleet import WORKSPACE, STATE, read, active_config
 
 WORK = Path(__file__).resolve().parent
 PLAN = STATE/'server-plan.json'
+VALIDATION_VERSION = 2
 
 
 from storage import save, lock
@@ -63,6 +64,7 @@ def summarize(plan):
 
 def native_preflight(config):
     from fleetctl import remote
+    from protocols import protocol_type
     from concurrent.futures import ThreadPoolExecutor
     configured=[s for s in config['servers'] if s.get('status','active')=='active' and s.get('protocols')]
     def check(server):
@@ -73,6 +75,10 @@ def native_preflight(config):
             raise ValueError(server['id']+'：服务未就绪或原生配置存在漂移')
         if live.get('unfinished_transactions') or live.get('source_matches') is not True:
             raise ValueError(server['id']+'：事务未恢复或订阅源与服务端不一致')
+        uses_cf=any(p.get('enabled') and protocol_type(ident,p) in ('cf','xhttp') for ident,p in server['protocols'].items())
+        cf=live.get('cloudflare_health',{})
+        if uses_cf and (not cf.get('service_active') or cf.get('ready') is False):
+            raise ValueError(server['id']+'：CF 隧道未就绪，未发布订阅')
         if live.get('certificate_health') is None or any(not v['usable'] for v in live['certificate_health'].values()):
             raise ValueError(server['id']+'：证书尚未验收或已失效')
     with ThreadPoolExecutor(max_workers=min(4,max(1,len(configured)))) as pool:list(pool.map(check,configured))
@@ -88,7 +94,7 @@ def prepare(config):
             before=get(config,kind,candidate['name'])
             after=copy.deepcopy(before or {}); after.update(candidate)
             items.append({'kind':kind,'name':candidate['name'],'before':before,'after':after})
-    plan={'inventory_sha256':digest(config),'servers':len(config['servers']),'items':items}
+    plan={'validation_version':VALIDATION_VERSION,'inventory_sha256':digest(config),'servers':len(config['servers']),'items':items}
     # Validate in isolated native Sub-Store objects before changing production.
     plan['rendered_sha256']=stage(config, payload)
     save(PLAN,plan)
@@ -156,11 +162,8 @@ def stage(config, payload):
                 value=yaml.safe_load(request(config,'/download/collection/'+prefix+'?target='+target,raw=True,user_agent=ua))
                 check_profile(value)
                 full=json.loads((STATE/('validated-'+('stash' if target=='Stash' else 'clash')+'.json')).read_text())
-                wanted=full['proxies']
-                if key=='download-stash':wanted=[n for n in wanted if n.get('network')!='xhttp' and not (n['type']=='vless' and n.get('encryption') not in (None,'','none'))]
-                expected_profile=stash_expected_profile(full,key!='download-stash') if target=='Stash' else full
-                if value['proxies']!=wanted or any(value.get(k)!=expected_profile.get(k) for k in ('dns','rules','rule-providers','script')):
-                    raise ValueError('客户端导出丢失节点参数、DNS 或规则：'+key)
+                expected=stash_expected_profile(full,key!='download-stash') if target=='Stash' else full
+                check_equivalent_profile(value,expected,key)
                 rendered[key]=digest(value)
         for country in payload['collections'][1:]:
             col=copy.deepcopy(country);col['name']=prefix+'-'+country['name']
@@ -168,9 +171,14 @@ def stage(config, payload):
                 if op['type']=='Response Transformer':op['args']['arguments'].update(profile=prefix+'-clash',stash_profile=prefix+'-stash')
             col['subscriptions']=[aliases[n] for n in country['subscriptions']]
             creating('collection',col['name']);request(config,'/api/collections',col,'POST')
-            value=yaml.safe_load(request(config,'/download/collection/'+col['name']+'?target=ClashMeta',raw=True))
-            nodes=value.get('proxies',[])
-            if not nodes or len({n['name'] for n in nodes})!=len(nodes):raise ValueError('国家订阅为空或节点重复')
+            prefixes=[s['name'] for s in active_config(config)['servers'] if s['subscription']['name'] in country['subscriptions']]
+            for key,(target,ua) in DOWNLOAD_CASES.items():
+                value=yaml.safe_load(request(config,'/download/collection/'+col['name']+'?target='+target,raw=True,user_agent=ua))
+                full=json.loads((STATE/('validated-'+('stash' if target=='Stash' else 'clash')+'.json')).read_text())
+                expected=stash_expected_profile(full,key!='download-stash') if target=='Stash' else full
+                expected=subset_profile(expected,[n for n in expected['proxies'] if any(n['name'].startswith(p+'-T-') or n['name'].startswith(p+'-U-') for p in prefixes)])
+                check_equivalent_profile(value,expected,country['name']+'/'+key)
+                rendered['country-profile:'+country['name']+':'+key]=digest(value)
             uri=request(config,'/download/collection/'+col['name']+'?target=URI',raw=True)
             rendered[country['name']]=digest(uri)
     finally:
@@ -196,12 +204,8 @@ def check_stash_file_cases(config,name,full):
     rendered={}
     for key,ua in STASH_FILE_CASES.items():
         value=yaml.safe_load(request(config,'/api/file/'+name,raw=True,user_agent=ua))
-        check_profile(value)
-        wanted=full['proxies']
-        if key!='file-stash-mac-modern':wanted=[n for n in wanted if n.get('network')!='xhttp' and not (n['type']=='vless' and n.get('encryption') not in (None,'','none'))]
         expected=stash_expected_profile(full,key=='file-stash-mac-modern')
-        if value['proxies']!=wanted or any(value.get(k)!=expected.get(k) for k in ('dns','rules','rule-providers','script')):
-            raise ValueError('Stash 文件输出丢失节点参数、DNS 或规则：'+key)
+        check_equivalent_profile(value,expected,key)
         rendered[key]=digest(value)
     return rendered
 
@@ -209,9 +213,32 @@ def check_stash_file_cases(config,name,full):
 def stash_expected_profile(full,modern):
     expected=copy.deepcopy(full)
     if not modern:
+        expected=subset_profile(expected,[n for n in expected['proxies'] if n.get('network')!='xhttp' and not(n['type']=='vless' and n.get('encryption') not in (None,'','none'))])
         policy=expected['dns']['nameserver-policy']
         policy['geosite:cn']=policy.pop('rule-set:国内域名')
     return expected
+
+
+def subset_profile(full,nodes):
+    """Retain exact settings and order while removing absent nodes/country groups."""
+    expected=copy.deepcopy(full);expected['proxies']=copy.deepcopy(nodes)
+    groups=expected['proxy-groups']
+    allowed={n['name'] for n in nodes}|{g['name'] for g in groups}|{'DIRECT','REJECT','PASS'}
+    while True:
+        for g in groups:g['proxies']=[p for p in g['proxies'] if p in allowed]
+        empty={g['name'] for g in groups if not g['proxies']}
+        if not empty:break
+        groups[:]=[g for g in groups if g['name'] not in empty];allowed-=empty
+    check_profile(expected)
+    return expected
+
+
+def check_equivalent_profile(value,expected,label):
+    check_profile(value)
+    if value!=expected:
+        # Field names only: node values and private DNS/source URLs stay private.
+        fields=sorted(k for k in set(value)|set(expected) if value.get(k)!=expected.get(k))
+        raise ValueError('客户端完整配置与预期不符：'+label+'；字段：'+','.join(fields))
 
 
 def check_sr_ads(raw):
@@ -226,7 +253,7 @@ def check_profile(value):
     if not isinstance(value,dict) or not all(k in value for k in ('proxies','proxy-groups','rules')):raise ValueError('Sub-Store 未生成完整配置，处理器可能报错')
     nodes=[n['name'] for n in value['proxies']]
     groups=value['proxy-groups'];group_names=[g['name'] for g in groups]
-    if not nodes or len(set(nodes+group_names))!=len(nodes+group_names) or not value['rules']:
+    if not nodes or not groups or len(set(nodes+group_names))!=len(nodes+group_names) or not value['rules']:
         raise ValueError('节点、分组重复或规则为空')
     allowed=set(nodes+group_names+['DIRECT','REJECT']+([] if value.get('dns',{}).get('follow-rule') else ['PASS']))
     for g in groups:
@@ -237,9 +264,21 @@ def check_profile(value):
         for nxt in graph[name]:visit(nxt,path|{name})
     for name in graph:visit(name,set())
 
+    providers=value.get('rule-providers',{})
+    for rule in value['rules']:
+        parts=rule.split(',')
+        if parts[-1]=='no-resolve':parts=parts[:-1]
+        if len(parts)<2 or parts[-1] not in allowed:raise ValueError('规则目标引用无效')
+        if parts[0]=='RULE-SET' and (len(parts)!=3 or parts[1] not in providers):raise ValueError('规则集引用无效')
+        if parts[0]=='SCRIPT' and parts[1] not in value.get('script',{}).get('shortcuts',{}):raise ValueError('规则脚本引用无效')
+    for key in value.get('dns',{}).get('nameserver-policy',{}):
+        if key.startswith('rule-set:') and any(p not in providers for p in key[9:].split(',')):
+            raise ValueError('DNS 规则集引用无效')
+
 
 def publish(config):
     plan=json.loads(PLAN.read_text())
+    if plan.get('validation_version')!=VALIDATION_VERSION:raise ValueError('验收规则已更新，请重新 plan')
     if plan['inventory_sha256']!=digest(config):raise ValueError('资料已改变，请重新 plan')
     native_preflight(config)
     if any(get(config,x['kind'],x['name'])!=x['before'] for x in plan['items']):
@@ -271,6 +310,12 @@ def publish(config):
             value=yaml.safe_load(request(config,'/download/collection/all?target='+target,raw=True,user_agent=ua))
             check_profile(value)
             if digest(value)!=plan['rendered_sha256'][key]:raise ValueError('客户端导出与已校验计划不符：'+key)
+        for key,wanted in plan['rendered_sha256'].items():
+            if not key.startswith('country-profile:'):continue
+            _,name,case=key.split(':');target,ua=DOWNLOAD_CASES[case]
+            value=yaml.safe_load(request(config,'/download/collection/'+name+'?target='+target,raw=True,user_agent=ua))
+            check_profile(value)
+            if digest(value)!=wanted:raise ValueError('国家完整配置与已校验计划不符：'+name+'/'+case)
         for name,wanted in plan['rendered_sha256'].items():
             if not name.startswith('shadowrocket-') or name in ('shadowrocket-config','shadowrocket-ads'):continue
             value=request(config,'/download/collection/'+name+'?target=URI',raw=True)

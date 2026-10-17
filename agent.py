@@ -11,7 +11,7 @@ import sys
 import tempfile
 import grp
 import yaml
-from protocols import adopt,export,render, classify
+from protocols import adopt,export,render, classify, protocol_type
 from storage import save,atomic,lock
 from inbounds import reconcile,engines
 
@@ -44,6 +44,40 @@ def certificate_health(state):
         except (OSError,ValueError,KeyError,IndexError,subprocess.SubprocessError):
             result[ref]={'usable':False,'error':'证书或私钥不可读取、解析或校验'}
     return result
+
+def cloudflare_health(state):
+    """Read the existing connector only; never start, reload or modify it."""
+    if not any(p['enabled'] and protocol_type(i,p) in ('cf','xhttp') for i,p in state['protocols'].items()):
+        return {'required':False}
+    import http.client,ipaddress
+    result={'required':True,'service_active':False,'ready':None}
+    try:
+        cmd(['systemctl','is-active','--quiet','argo'])
+        pid=int(cmd(['systemctl','show','argo','-p','MainPID','--value']).strip())
+        if pid<=0:raise ValueError('No connector process')
+        proc=Path('/proc')/str(pid)
+        if 'cloudflared' not in (proc/'exe').resolve().name:raise ValueError('Unexpected process')
+        result['service_active']=True
+        args=(proc/'cmdline').read_bytes().decode().split('\0')
+        endpoint=None
+        for index,arg in enumerate(args):
+            if arg=='--metrics':endpoint=args[index+1]
+            elif arg.startswith('--metrics='):endpoint=arg.split('=',1)[1]
+        if endpoint is None:
+            result['readiness_check']='metrics-not-explicit'
+            return result
+        host,port=endpoint.rsplit(':',1);host=host.strip('[]');port=int(port)
+        if not ipaddress.ip_address(host).is_loopback or not 0<port<65536:raise ValueError('Metrics must be loopback')
+        conn=http.client.HTTPConnection(host,port,timeout=3)
+        try:
+            conn.request('GET','/ready');response=conn.getresponse()
+            result['ready']=response.status==200
+        finally:conn.close()
+        result['readiness_check']='loopback-ready'
+    except (OSError,ValueError,IndexError,UnicodeError,subprocess.SubprocessError,http.client.HTTPException):
+        result['ready']=False;result['readiness_check']='unavailable'
+    return result
+
 
 def validate_native(state,values):
     for path,c in values.items():
@@ -252,6 +286,7 @@ def main():
             r['unfinished_transactions']=[p.name for p in HOME.glob('*journal.json')]
             r['source_matches']=TARGET.exists() and yaml.safe_load(TARGET.read_text())==export(configs(s),s) if r['native_configuration_matches'] else False
             r['certificate_health']=certificate_health(s)
+            r['cloudflare_health']=cloudflare_health(s)
         elif a.command=='plan':r=plan(json.load(sys.stdin))
         elif a.command=='planned':r=planned()
         elif a.command=='apply':r=apply(a.allow_restart,a.defer_commit)

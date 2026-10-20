@@ -70,7 +70,8 @@ if __name__ == '__main__':
                 small_burst = burst()
                 queued = b'queued-before-buffer-change'
                 client.sendto(queued, ('127.0.0.1', address['port']))
-                result = buffers.apply()
+                result = buffers.apply(unit='argosbx-reality443')
+                assert json.loads(buffers.RECEIPT.read_text())['unit'] == 'argosbx-reality443'
                 assert len(result['adjusted']) == 2, 'only IPv4/IPv6 UDP descriptors should change'
                 assert command('receive')['echo'] == len(queued)
                 assert client.recvfrom(4096)[0] == queued
@@ -79,7 +80,7 @@ if __name__ == '__main__':
                 large_burst = burst()
                 assert small_burst < large_burst == 256
                 assert command('new')['receive'] == 2097152
-                assert not buffers.apply()['changed']
+                assert not buffers.apply(unit='argosbx-reality443')['changed']
                 buffers.recover()
                 assert command('state') == before
                 assert command('new')['receive'] == 212992

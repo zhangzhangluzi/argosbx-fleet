@@ -178,3 +178,11 @@ sudo python3 -B /opt/argosbx-fleet/current/udp_buffers.py apply --effective-byte
 一键接入的 `onboard → bootstrap` 流程在启动协议之前自动设置 `net.core.rmem_default` 至少为有效 2 MiB，并将不足的 `net.core.rmem_max` 补齐到该值；已有更大的值保持。默认值和上限均写入原有 sysctl 文件，后续 Salamander 及 UDP 转发套接字直接继承。发送缓冲、拥塞控制和协议参数不变。
 初始化会检查内核读回值、新套接字实际缓冲、持久化内容及启动后的 sing-box 套接字。默认值设置阶段失败会恢复本次设置并停止安装；后续进程校验失败也会阻止安装成功，不会隐式重启服务。未恢复完成时保留事务，使用 `udp_buffers.py recover` 后续装。断点续装保持已验收参数，旧版未完成安装已运行的小缓冲按现有热调整流程修复，不重启连接。
 普通 `install.py` 发布包升级不调用初始化和调优；已经完成的旧版 `bootstrap` 返回 `legacy-install-unchanged`，已有机器仍需显式启用。因此升级维护代码不会更改台湾、美国或其他现有服务器的内核参数，日本已持久化的修复继续保留。
+
+## v1.2.13：补齐 Xray UDP 转发缓冲检查
+新默认值不会追溯改变长期运行的 Xray UDP 转发套接字。`udp_buffers.py` 现支持通过 `--service sb|xr|argosbx-reality443|argosbx-xhttp` 检查或热调整指定原生代理服务，省略时仍为 `sb`：
+```sh
+sudo python3 -B /opt/argosbx-fleet/current/udp_buffers.py inspect --service argosbx-reality443
+sudo python3 -B /opt/argosbx-fleet/current/udp_buffers.py apply --service argosbx-reality443 --effective-bytes 2097152
+```
+必须确认实际接收缓冲不足后才应用；现有较大缓冲、发送缓冲、TCP 套接字保持不变。工具核对指定服务的真实二进制、PID、启动时间与 boot ID，事务保存服务身份，失败回滚和 `recover` 自动作用于该服务；旧版未记录服务名的事务仍按 `sb` 恢复。恢复仅针对最近一笔事务，不能另传 `--service` 改变恢复对象。无 UDP 套接字时拒绝应用，维护版本升级不会自动调优或重启代理。

@@ -19,6 +19,8 @@ PERSIST = Path('/etc/sysctl.d/99-zz-argosbx-udp-buffers.conf')
 HOME = Path('/etc/argosbx-fleet')
 JOURNAL = HOME / 'udp-buffers-journal.json'
 RECEIPT = HOME / 'udp-buffers-receipt.json'
+SERVICES = {'sb': 'sing-box', 'xr': 'xray',
+            'argosbx-reality443': 'xray', 'argosbx-xhttp': 'xray'}
 
 
 def identity(pid):
@@ -27,11 +29,18 @@ def identity(pid):
             'boot': Path('/proc/sys/kernel/random/boot_id').read_text().strip()}
 
 
-def service():
+def expected_binary(unit):
+    if unit not in SERVICES:
+        raise ValueError('unsupported proxy service')
+    return Path('/root/agsbx') / SERVICES[unit]
+
+
+def service(unit='sb'):
+    binary = expected_binary(unit)
     pid = int(subprocess.check_output(
-        ['systemctl', 'show', 'sb', '-p', 'MainPID', '--value'], text=True).strip())
-    if pid <= 1 or Path(f'/proc/{pid}/exe').resolve() != Path('/root/agsbx/sing-box').resolve():
-        raise RuntimeError('sb is not the expected running sing-box')
+        ['systemctl', 'show', unit, '-p', 'MainPID', '--value'], text=True).strip())
+    if pid <= 1 or Path(f'/proc/{pid}/exe').resolve() != binary.resolve():
+        raise RuntimeError(unit + ' is not the expected running ' + binary.name)
     return identity(pid)
 
 
@@ -175,12 +184,13 @@ def initialize_defaults():
         raise
 
 
-def apply(target=DEFAULT_BYTES):
+def apply(target=DEFAULT_BYTES, unit='sb'):
+    expected_binary(unit)
     if type(target) is not int or target < 65536 or target > int(LIMIT.read_text()) or target % 2:
         raise ValueError('effective bytes must be even, >= 65536 and <= rmem_max')
     if JOURNAL.exists():
         raise RuntimeError('unfinished UDP buffer transaction; run recover')
-    owner = service()
+    owner = service(unit)
     before_default = int(SYSCTL.read_text())
     if before_default > target:
         raise RuntimeError('refusing to lower the existing default')
@@ -192,12 +202,12 @@ def apply(target=DEFAULT_BYTES):
     with udp_sockets(owner['pid']) as held:
         if not held:
             raise RuntimeError('no INET UDP sockets found; nothing changed')
-        if service() != owner:
-            raise RuntimeError('sb process changed before apply')
+        if service(unit) != owner:
+            raise RuntimeError(unit + ' process changed before apply')
         changed = [(sock, data) for sock, data in held if data['receive'] < target]
         if not changed and before_default == target and before_file and before_file['text'] == body:
             return {'changed': False, 'owner': owner, 'sockets': [data for _, data in held]}
-        record = {'owner': owner, 'default_before': before_default, 'file_before': before_file,
+        record = {'unit': unit, 'owner': owner, 'default_before': before_default, 'file_before': before_file,
                   'target': target, 'file_after': body, 'sockets': [data for _, data in changed]}
         save(JOURNAL, record)
         try:
@@ -218,15 +228,15 @@ def apply(target=DEFAULT_BYTES):
                 for sock, _ in extra:
                     set_receive(sock, target)
             atomic(PERSIST, body, 0o644)
-            if service() != owner:
-                raise RuntimeError('sb process changed during apply')
+            if service(unit) != owner:
+                raise RuntimeError(unit + ' process changed during apply')
             with udp_sockets(owner['pid']) as current:
                 result = [data for _, data in current]
                 if any(data['receive'] < target for data in result):
                     raise RuntimeError('a UDP socket did not retain the receive buffer')
             save(RECEIPT, record)
             JOURNAL.unlink()
-            return {'changed': True, 'owner': owner, 'default_before': before_default,
+            return {'changed': True, 'unit': unit, 'owner': owner, 'default_before': before_default,
                     'default_after': target, 'adjusted': record['sockets'], 'sockets': result,
                     'persistent': str(PERSIST), 'fresh_socket_receive': fresh_default()}
         except Exception:
@@ -276,7 +286,7 @@ def recover():
     restored = 0
     # A restarted process must not be confused with the original PID.
     try:
-        owner = service()
+        owner = service(record.get('unit', 'sb'))
     except (RuntimeError, FileNotFoundError, subprocess.CalledProcessError):
         owner = None  # A stopped service still permits restoring the system default.
     if owner == record['owner']:
@@ -301,10 +311,10 @@ def recover():
             'default': record['default_before'], 'newer_sockets_retained_until_close': True}
 
 
-def inspect():
-    owner = service()
+def inspect(unit='sb'):
+    owner = service(unit)
     with udp_sockets(owner['pid']) as held:
-        return {'owner': owner, 'default': int(SYSCTL.read_text()), 'maximum': int(LIMIT.read_text()),
+        return {'unit': unit, 'owner': owner, 'default': int(SYSCTL.read_text()), 'maximum': int(LIMIT.read_text()),
                 'persistent': snapshot_file(), 'sockets': [data for _, data in held]}
 
 
@@ -312,7 +322,12 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('action', choices=['inspect', 'apply', 'recover'])
     parser.add_argument('--effective-bytes', type=int, default=DEFAULT_BYTES)
+    parser.add_argument('--service', choices=sorted(SERVICES), default=None,
+                        help='proxy service to inspect/tune; defaults to sb; recovery uses its saved service')
     args = parser.parse_args()
+    if args.action == 'recover' and args.service is not None:
+        parser.error('recover selects the service from its transaction; omit --service')
     with lock(HOME / 'udp-buffers.lock'):
-        result = apply(args.effective_bytes) if args.action == 'apply' else globals()[args.action]()
+        result = (apply(args.effective_bytes, args.service or 'sb') if args.action == 'apply'
+                  else inspect(args.service or 'sb') if args.action == 'inspect' else recover())
     print(json.dumps(result))

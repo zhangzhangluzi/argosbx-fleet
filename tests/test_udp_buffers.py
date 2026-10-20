@@ -1,4 +1,5 @@
 import contextlib
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -162,6 +163,29 @@ class BufferTransaction(unittest.TestCase):
             buffers.apply()
         self.assertEqual(buffers.JOURNAL.read_text(), '{}')
 
+    def test_xray_apply_and_recovery_use_recorded_service_only(self):
+        check = self.patch('service', return_value=self.owner)
+        buffers.apply(unit='argosbx-reality443')
+        self.assertEqual(json.loads(buffers.RECEIPT.read_text())['unit'], 'argosbx-reality443')
+        self.assertEqual(buffers.recover()['restored_original_sockets'], 1)
+        self.assertTrue(all(c.args == ('argosbx-reality443',) for c in check.call_args_list))
+        self.assertEqual([s.receive for s in self.sockets], [212992, 16777216])
+
+    def test_legacy_receipt_recovers_sb(self):
+        buffers.apply()
+        record = json.loads(buffers.RECEIPT.read_text())
+        record.pop('unit')
+        buffers.RECEIPT.write_text(json.dumps(record))
+        check = self.patch('service', return_value=self.owner)
+        self.assertEqual(buffers.recover()['restored_original_sockets'], 1)
+        check.assert_called_once_with('sb')
+
+    def test_unsupported_service_never_changes_default(self):
+        with self.assertRaisesRegex(ValueError, 'unsupported'):
+            buffers.apply(unit='ssh')
+        self.assertEqual(buffers.SYSCTL.read_text(), '212992')
+        self.assertFalse(buffers.JOURNAL.exists())
+
     def test_new_host_initializes_without_a_running_service(self):
         buffers.LIMIT.write_text('212992')
         service = self.patch('service', side_effect=AssertionError('no service yet'))
@@ -224,6 +248,26 @@ class BufferTransaction(unittest.TestCase):
         buffers.PERSIST.write_text('net.core.rmem_default = 212992\n')
         with self.assertRaisesRegex(RuntimeError, 'did not verify'):
             buffers.verify_defaults()
+
+
+class ServiceIdentity(unittest.TestCase):
+    def test_xray_unit_requires_expected_executable(self):
+        owner = {'pid': 42, 'start': '123', 'boot': 'test'}
+        with patch.object(buffers.subprocess, 'check_output', return_value='42\n') as query, \
+             patch.object(buffers, 'identity', return_value=owner), \
+             patch.object(Path, 'resolve', autospec=True,
+                          side_effect=lambda p: Path('/root/agsbx/xray') if str(p)=='/proc/42/exe' else p):
+            self.assertEqual(buffers.service('argosbx-reality443'), owner)
+            query.assert_called_once_with(
+                ['systemctl', 'show', 'argosbx-reality443', '-p', 'MainPID', '--value'], text=True)
+            with self.assertRaisesRegex(RuntimeError, 'expected running sing-box'):
+                buffers.service('sb')
+
+    def test_arbitrary_units_are_rejected_before_systemctl(self):
+        with patch.object(buffers.subprocess, 'check_output') as query:
+            with self.assertRaisesRegex(ValueError, 'unsupported'):
+                buffers.service('ssh')
+            query.assert_not_called()
 
 
 class BootstrapBufferPolicy(unittest.TestCase):

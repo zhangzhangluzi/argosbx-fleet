@@ -163,3 +163,13 @@ XHTTP 的客户端复用配置写在该入站的 `client.reuse-settings`，导�
 统一文件、通用下载及每个国家的 Clash / 新旧 Stash 导出，逐项核对完整配置，包括分组成员与顺序、默认选择、测速间隔和懒加载；过滤旧版 Stash 不支持的节点后同步移除空国家组。国家 URI 仍校验原内容，原地址、协议及规则不变。规则目标、规则集、DNS 规则集和脚本快捷方式引用也必须存在。
 发布前读取 `argo` 服务及其真实进程。显式配置回环 `--metrics` 时，检查原生 `/ready`；服务停止或该检查失败会阻止发布，不重启连接器，不暴露 metrics 端口。旧安装未显式配置 metrics 时标明 `metrics-not-explicit`，仅确认进程运行，不把未知 readiness 当作已通过。当前三台部署已有回环 metrics，因此执行完整 readiness 检查。CF readiness 只证明连接器已连接边缘，不等同于端到端业务或长期稳定性。
 Stash 每个节点保留原生 `benchmark-url: http://www.gstatic.com/generate_204` 和 `benchmark-timeout: 8`。用户配置的国家组半小时检测与上层选择组禁用重复定时检测保持不变。
+
+## v1.2.11：现有 UDP 接收缓冲无重启调整
+仅在发现实际套接字缓冲不足并完成验收后显式执行，安装工具本身不改内核参数：
+```sh
+sudo python3 -B /opt/argosbx-fleet/current/udp_buffers.py inspect
+sudo python3 -B /opt/argosbx-fleet/current/udp_buffers.py apply --effective-bytes 2097152
+```
+工具核对 `sb` 的原生 sing-box 进程身份，通过 Linux `pidfd_getfd` 复制其 INET UDP 套接字句柄，只扩大接收缓冲；不读取数据、不关闭原始句柄、不重启服务。需要 Linux x86_64/aarch64、root 和相应 ptrace 权限，权限不足时提前退出。Linux 的 `SO_RCVBUF` 请求值会翻倍，工具按最终有效字节校验。
+`/etc/sysctl.d/99-zz-argosbx-udp-buffers.conf` 显式保存 `net.core.rmem_default`，覆盖后续新建的默认套接字，包括 UDP 转发；也影响本机其他程序未自行设置缓冲的新套接字。上限、发送缓冲、QUIC 窗口和拥塞控制保持不变。2 MiB 是队列容量上限，并非每个空闲套接字预分配 2 MiB；不能据此承诺线路吞吐提高或网络丢包消失。
+失败自动恢复已更改套接字、默认值和本工具的 sysctl 文件；失败未恢复完成时保留小型事务记录。`udp_buffers.py recover` 可恢复事务或最近成功调整前的值，以启动时间、boot ID 和 socket inode 防止错改复用的 PID/FD。后来新建的套接字保留其当前缓冲直至自然关闭，以保护连接。部署后应核对有效缓冲、真实 UDP 业务、丢包增量及进程/订阅不变，不能用历史累计丢包值判断仍在丢包。

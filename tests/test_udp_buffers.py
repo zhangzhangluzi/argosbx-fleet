@@ -162,6 +162,108 @@ class BufferTransaction(unittest.TestCase):
             buffers.apply()
         self.assertEqual(buffers.JOURNAL.read_text(), '{}')
 
+    def test_new_host_initializes_without_a_running_service(self):
+        buffers.LIMIT.write_text('212992')
+        service = self.patch('service', side_effect=AssertionError('no service yet'))
+        result = buffers.initialize_defaults()
+        self.assertTrue(result['verified'])
+        self.assertEqual(result['effective_receive'], 2097152)
+        self.assertEqual(result['maximum'], 2097152)
+        self.assertIn('net.core.rmem_max = 2097152', buffers.PERSIST.read_text())
+        service.assert_not_called()
+        receipt = buffers.RECEIPT.read_bytes()
+        self.assertFalse(buffers.initialize_defaults()['changed'])
+        self.assertEqual(receipt, buffers.RECEIPT.read_bytes())
+
+    def test_new_host_preserves_larger_defaults_and_limits(self):
+        buffers.SYSCTL.write_text('4194304')
+        result = buffers.initialize_defaults()
+        self.assertEqual(result['effective_receive'], 4194304)
+        self.assertEqual(result['maximum'], 16777216)
+        self.assertEqual(buffers.verify_defaults()['effective_receive'], 4194304)
+
+    def test_new_host_failed_validation_restores_default_limit_and_file(self):
+        buffers.LIMIT.write_text('212992')
+        buffers.PERSIST.write_text('# previous\n')
+        buffers.PERSIST.chmod(0o640)
+        before = buffers.snapshot_file()
+        self.patch('verify_defaults', side_effect=RuntimeError('injected validation failure'))
+        with self.assertRaisesRegex(RuntimeError, 'injected'):
+            buffers.initialize_defaults()
+        self.assertEqual(int(buffers.SYSCTL.read_text()), 212992)
+        self.assertEqual(int(buffers.LIMIT.read_text()), 212992)
+        self.assertEqual(buffers.snapshot_file(), before)
+        self.assertFalse(buffers.JOURNAL.exists())
+
+    def test_new_host_recovery_restores_maximum_without_service_access(self):
+        buffers.LIMIT.write_text('212992')
+        buffers.initialize_defaults()
+        service = self.patch('service', side_effect=AssertionError('no service'))
+        result = buffers.recover()
+        service.assert_not_called()
+        self.assertEqual(result['default'], 212992)
+        self.assertEqual(result['maximum'], 212992)
+        self.assertFalse(buffers.PERSIST.exists())
+
+    def test_new_host_recovery_does_not_clobber_external_limit_change(self):
+        buffers.initialize_defaults()
+        buffers.LIMIT.write_text('33554432')
+        with self.assertRaisesRegex(RuntimeError, 'maximum changed externally'):
+            buffers.recover()
+        self.assertEqual(int(buffers.SYSCTL.read_text()), 2097152)
+        self.assertTrue(buffers.RECEIPT.exists())
+
+    def test_live_tuning_preserves_initialized_limit_persistence(self):
+        buffers.initialize_defaults()
+        buffers.apply()
+        self.assertIn('net.core.rmem_max = 16777216', buffers.PERSIST.read_text())
+        self.assertTrue(buffers.verify_defaults()['verified'])
+
+    def test_missing_or_insufficient_persistence_is_not_accepted(self):
+        buffers.initialize_defaults()
+        buffers.PERSIST.write_text('net.core.rmem_default = 212992\n')
+        with self.assertRaisesRegex(RuntimeError, 'did not verify'):
+            buffers.verify_defaults()
+
+
+class BootstrapBufferPolicy(unittest.TestCase):
+    def test_initialization_failure_prevents_service_install_and_export(self):
+        import bootstrap
+        with tempfile.TemporaryDirectory() as temp, \
+             patch.object(bootstrap, 'JOURNAL', Path(temp)/'bootstrap.json'), \
+             patch.object(buffers, 'HOME', Path(temp)), \
+             patch.object(bootstrap, 'preflight'), \
+             patch.object(buffers, 'initialize_defaults', side_effect=RuntimeError('buffer validation failed')), \
+             patch.object(bootstrap, 'run') as run, \
+             patch.object(bootstrap.agent, 'export_source') as export:
+            with self.assertRaisesRegex(RuntimeError, 'buffer validation failed'):
+                bootstrap.install({}, 'test-only')
+            run.assert_not_called()
+            export.assert_not_called()
+
+    def test_completed_legacy_install_is_not_automatically_retuned(self):
+        import bootstrap
+        import json
+        server = {'protocols': {}, 'onboarding': {'certificate_host': 'test.example.com'},
+                  'subscription': {'url': 'https://test.example.com:8443/'+'a'*32},
+                  'certificates': {'domain': {'certificate_file': '/test/cert', 'key_file': '/test/key'}}}
+        with tempfile.TemporaryDirectory() as temp, \
+             patch.object(bootstrap, 'JOURNAL', Path(temp)/'bootstrap.json'), \
+             patch.object(bootstrap, 'preflight'), \
+             patch.object(bootstrap, 'run'), \
+             patch.object(buffers, 'initialize_defaults') as initialize, \
+             patch.object(buffers, 'apply') as apply, \
+             patch.object(buffers, 'verify_defaults') as verify, \
+             patch.object(bootstrap.agent, 'load', return_value={}), \
+             patch.object(bootstrap.agent, 'certificate_health', return_value={}), \
+             patch.object(bootstrap.agent, 'export_source', return_value={}):
+            bootstrap.JOURNAL.write_text(json.dumps({'server': server, 'phase': 4}))
+            result = bootstrap.install(server, 'test-only')
+            self.assertEqual(result['udp_buffers']['status'], 'legacy-install-unchanged')
+            initialize.assert_not_called()
+            apply.assert_not_called()
+            verify.assert_not_called()
+
 
 if __name__ == '__main__':
     unittest.main()

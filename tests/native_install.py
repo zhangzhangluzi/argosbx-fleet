@@ -3,7 +3,7 @@ import copy,json,os,sys,subprocess,tempfile,threading,time,ssl,http.server,hashl
 from pathlib import Path
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
-import bootstrap,agent
+import bootstrap,agent,udp_buffers
 from onboard import defaults
 from storage import save
 
@@ -14,14 +14,24 @@ with open('/etc/hosts','a') as f:f.write('\n127.0.0.1 cover.example.com\n')
 # CI tunnel process has no production account; real CF API/connector is independently verified.
 original_unit=bootstrap.unit
 def unit(name,command,*args):return original_unit(name,'/usr/bin/sleep infinity' if name=='argo' else command,*args)
+# Simulate a pristine kernel default. Only this disposable CI host is changed.
+udp_buffers.SYSCTL.write_text('212992\n');udp_buffers.LIMIT.write_text('212992\n')
 try:
  with patch.object(bootstrap,'unit',unit):result=bootstrap.install(server,'ci-fixture-only',test_certificate=True)
 except Exception:
  print(subprocess.getoutput('journalctl -u xr -u sb -u argo -u caddy-sub --no-pager -n 60'));raise
 assert result['installed']
+assert result['udp_buffers']['verified'] and result['udp_buffers']['effective_receive']==2097152
+assert udp_buffers.PERSIST.exists() and int(udp_buffers.LIMIT.read_text())==2097152
+with udp_buffers.udp_sockets(udp_buffers.service()['pid']) as sockets:
+ assert sockets and all(d['receive']>=2097152 for _,d in sockets)
+buffer_files={p:p.read_bytes() for p in (udp_buffers.PERSIST,udp_buffers.RECEIPT)}
+buffer_pid=udp_buffers.service()
 state=agent.load();before={p:Path(p).read_bytes() for p in state['native_sha256']}
 with patch.object(bootstrap,'unit',unit):bootstrap.install(server,'ci-fixture-only',test_certificate=True)
 assert before=={p:Path(p).read_bytes() for p in before}
+assert buffer_files=={p:p.read_bytes() for p in buffer_files} and udp_buffers.service()==buffer_pid
+print('PASS default new-host UDP buffers, persistence, real sockets and resume without restart',flush=True)
 # TLS 1.3 cover server for REALITY and ShadowTLS; never relies on an external website.
 class Handler(http.server.BaseHTTPRequestHandler):
  def do_GET(self):

@@ -1,4 +1,4 @@
-"""Opt-in Linux receive-buffer tuning; no restart, socket I/O, or daemon."""
+"""Linux UDP defaults for new hosts and opt-in live tuning; no service restart."""
 import argparse
 import contextlib
 import ctypes
@@ -115,6 +115,66 @@ def fresh_default():
         return sock.getsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF)
 
 
+def persistent_body(target, maximum=None):
+    body = '# Managed by ArgoSBX Fleet; effective bytes for new default sockets.\n'
+    if maximum is not None:
+        body += 'net.core.rmem_max = %d\n' % maximum
+    return body + 'net.core.rmem_default = %d\n' % target
+
+
+def verify_defaults(minimum=DEFAULT_BYTES):
+    actual, maximum = int(SYSCTL.read_text()), int(LIMIT.read_text())
+    saved = snapshot_file()
+    values = {}
+    for line in (saved or {}).get('text', '').splitlines():
+        if line.strip() and not line.lstrip().startswith('#'):
+            key, _, value = line.partition('=')
+            values[key.strip()] = int(value.strip())
+    if (actual < minimum or maximum < actual or fresh_default() != actual
+            or values.get('net.core.rmem_default', 0) < minimum
+            or values.get('net.core.rmem_max', 0) < values.get('net.core.rmem_default', 0)):
+        raise RuntimeError('initialized UDP defaults or persistence did not verify')
+    return {'verified': True, 'effective_receive': actual, 'maximum': maximum,
+            'persistent': str(PERSIST)}
+
+
+def initialize_defaults():
+    """Called before new-host services start; does not require a live process."""
+    if JOURNAL.exists():
+        raise RuntimeError('unfinished UDP buffer transaction; run recover')
+    old_default, old_max = int(SYSCTL.read_text()), int(LIMIT.read_text())
+    target = max(DEFAULT_BYTES, old_default)
+    maximum = max(old_max, target)
+    before_file = snapshot_file()
+    body = persistent_body(target, maximum)
+    if old_default == target and old_max == maximum and before_file and before_file['text'] == body:
+        return {'changed': False, **verify_defaults()}
+    record = {'kind': 'defaults', 'default_before': old_default, 'maximum_before': old_max,
+              'maximum_after': maximum, 'target': target, 'file_before': before_file,
+              'file_after': body}
+    save(JOURNAL, record)
+    try:
+        LIMIT.write_text(str(maximum) + '\n')
+        SYSCTL.write_text(str(target) + '\n')
+        atomic(PERSIST, body, 0o644)
+        result = verify_defaults()
+        save(RECEIPT, record)
+        JOURNAL.unlink()
+        return {'changed': True, **result}
+    except Exception:
+        try:
+            SYSCTL.write_text(str(old_default) + '\n')
+            LIMIT.write_text(str(old_max) + '\n')
+            restore_file(before_file)
+            if (int(SYSCTL.read_text()) != old_default or int(LIMIT.read_text()) != old_max
+                    or fresh_default() != old_default or snapshot_file() != before_file):
+                raise RuntimeError('initialization rollback readback failed')
+        except Exception:
+            raise RuntimeError('initialization rollback incomplete; run recover')
+        JOURNAL.unlink(missing_ok=True)
+        raise
+
+
 def apply(target=DEFAULT_BYTES):
     if type(target) is not int or target < 65536 or target > int(LIMIT.read_text()) or target % 2:
         raise ValueError('effective bytes must be even, >= 65536 and <= rmem_max')
@@ -125,7 +185,10 @@ def apply(target=DEFAULT_BYTES):
     if before_default > target:
         raise RuntimeError('refusing to lower the existing default')
     before_file = snapshot_file()
-    body = '# Managed by ArgoSBX Fleet; effective bytes for new default sockets.\nnet.core.rmem_default = %d\n' % target
+    # Keep the new-host maximum persistent when later tuning existing sockets.
+    managed_max = before_file and any(line.strip().startswith('net.core.rmem_max')
+                                     for line in before_file['text'].splitlines())
+    body = persistent_body(target, int(LIMIT.read_text()) if managed_max else None)
     with udp_sockets(owner['pid']) as held:
         if not held:
             raise RuntimeError('no INET UDP sockets found; nothing changed')
@@ -196,6 +259,20 @@ def recover():
         raise RuntimeError('sysctl file changed externally; refusing to overwrite')
     if int(SYSCTL.read_text()) not in (record['default_before'], record['target']):
         raise RuntimeError('receive default changed externally; refusing to overwrite')
+    if record.get('kind') == 'defaults':
+        if int(LIMIT.read_text()) not in (record['maximum_before'], record['maximum_after']):
+            raise RuntimeError('receive maximum changed externally; refusing to overwrite')
+        SYSCTL.write_text(str(record['default_before']) + '\n')
+        LIMIT.write_text(str(record['maximum_before']) + '\n')
+        restore_file(record['file_before'])
+        if (fresh_default() != record['default_before']
+                or int(LIMIT.read_text()) != record['maximum_before']
+                or snapshot_file() != record['file_before']):
+            raise RuntimeError('defaults recovery readback failed')
+        JOURNAL.unlink(missing_ok=True)
+        RECEIPT.unlink(missing_ok=True)
+        return {'recovered': True, 'default': record['default_before'],
+                'maximum': record['maximum_before'], 'existing_sockets_unchanged': True}
     restored = 0
     # A restarted process must not be confused with the original PID.
     try:

@@ -7,6 +7,7 @@ from storage import save,atomic,lock
 from inbounds import reconcile
 from protocols import render,export,protocol_type
 import agent
+import udp_buffers
 ROOT=Path(__file__).resolve().parent
 JOURNAL=Path('/etc/argosbx-fleet/bootstrap.json')
 NATIVE=Path('/root/agsbx')
@@ -78,6 +79,14 @@ def install(server,connector_token,test_certificate=False):
         if j['server']!=server:raise ValueError('未完成安装属于另一配置，保留现场')
     else:j={'server':server,'phase':0};save(JOURNAL,j)
     def checkpoint(phase):j['phase']=phase;save(JOURNAL,j)
+    # New/resumable installations initialize the default before starting services.
+    # A completed legacy installation is not silently retuned on a maintenance upgrade.
+    if j['phase'] < 4:
+        with lock(udp_buffers.HOME/'udp-buffers.lock'):
+            j['udp_buffers'] = udp_buffers.initialize_defaults()
+        save(JOURNAL,j)
+    if 'udp_buffers' in j:
+        udp_buffers.verify_defaults()
     if j['phase']<1:
         run(['apt-get','-o','DPkg::Lock::Timeout=180','update'],240)
         run(['apt-get','-o','DPkg::Lock::Timeout=180','install','-y','ca-certificates','openssl','python3-yaml'],300)
@@ -136,7 +145,16 @@ def install(server,connector_token,test_certificate=False):
     for service in ('xr','sb','argo','caddy-sub'):run(['systemctl','is-active','--quiet',service])
     health=agent.certificate_health(agent.load())
     if any(not v['usable'] for v in health.values()):raise ValueError('原生证书校验失败')
-    return {'installed':True,'resumable':True,'protocols':list(server['protocols']),'certificate_health':health,'source_exported':agent.export_source(),'required_ingress':[str(p)+'/'+t for t,p in ports(server)]}
+    buffers={'status':'legacy-install-unchanged'}
+    if 'udp_buffers' in j:
+        # A previous interrupted attempt may already have started sb with old defaults.
+        with lock(udp_buffers.HOME/'udp-buffers.lock'):
+            owner=udp_buffers.service()
+            with udp_buffers.udp_sockets(owner['pid']) as held:
+                low=any(d['receive'] < udp_buffers.DEFAULT_BYTES for _,d in held)
+            if low:udp_buffers.apply(max(udp_buffers.DEFAULT_BYTES,int(udp_buffers.SYSCTL.read_text())))
+            buffers=udp_buffers.verify_defaults()
+    return {'installed':True,'resumable':True,'protocols':list(server['protocols']),'certificate_health':health,'source_exported':agent.export_source(),'required_ingress':[str(p)+'/'+t for t,p in ports(server)],'udp_buffers':buffers}
 
 if __name__=='__main__':
     try:

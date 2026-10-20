@@ -165,7 +165,7 @@ XHTTP 的客户端复用配置写在该入站的 `client.reuse-settings`，导�
 Stash 每个节点保留原生 `benchmark-url: http://www.gstatic.com/generate_204` 和 `benchmark-timeout: 8`。用户配置的国家组半小时检测与上层选择组禁用重复定时检测保持不变。
 
 ## v1.2.11：现有 UDP 接收缓冲无重启调整
-仅在发现实际套接字缓冲不足并完成验收后显式执行，安装工具本身不改内核参数：
+对已有服务器，仅在发现实际套接字缓冲不足并完成验收后显式执行；维护工具安装本身不改内核参数：
 ```sh
 sudo python3 -B /opt/argosbx-fleet/current/udp_buffers.py inspect
 sudo python3 -B /opt/argosbx-fleet/current/udp_buffers.py apply --effective-bytes 2097152
@@ -173,3 +173,8 @@ sudo python3 -B /opt/argosbx-fleet/current/udp_buffers.py apply --effective-byte
 工具核对 `sb` 的原生 sing-box 进程身份，通过 Linux `pidfd_getfd` 复制其 INET UDP 套接字句柄，只扩大接收缓冲；不读取数据、不关闭原始句柄、不重启服务。需要 Linux x86_64/aarch64、root 和相应 ptrace 权限，权限不足时提前退出。Linux 的 `SO_RCVBUF` 请求值会翻倍，工具按最终有效字节校验。
 `/etc/sysctl.d/99-zz-argosbx-udp-buffers.conf` 显式保存 `net.core.rmem_default`，覆盖后续新建的默认套接字，包括 UDP 转发；也影响本机其他程序未自行设置缓冲的新套接字。上限、发送缓冲、QUIC 窗口和拥塞控制保持不变。2 MiB 是队列容量上限，并非每个空闲套接字预分配 2 MiB；不能据此承诺线路吞吐提高或网络丢包消失。
 失败自动恢复已更改套接字、默认值和本工具的 sysctl 文件；失败未恢复完成时保留小型事务记录。`udp_buffers.py recover` 可恢复事务或最近成功调整前的值，以启动时间、boot ID 和 socket inode 防止错改复用的 PID/FD。后来新建的套接字保留其当前缓冲直至自然关闭，以保护连接。部署后应核对有效缓冲、真实 UDP 业务、丢包增量及进程/订阅不变，不能用历史累计丢包值判断仍在丢包。
+
+## v1.2.12：新服务器默认修复 UDP 缓冲
+一键接入的 `onboard → bootstrap` 流程在启动协议之前自动设置 `net.core.rmem_default` 至少为有效 2 MiB，并将不足的 `net.core.rmem_max` 补齐到该值；已有更大的值保持。默认值和上限均写入原有 sysctl 文件，后续 Salamander 及 UDP 转发套接字直接继承。发送缓冲、拥塞控制和协议参数不变。
+初始化会检查内核读回值、新套接字实际缓冲、持久化内容及启动后的 sing-box 套接字。默认值设置阶段失败会恢复本次设置并停止安装；后续进程校验失败也会阻止安装成功，不会隐式重启服务。未恢复完成时保留事务，使用 `udp_buffers.py recover` 后续装。断点续装保持已验收参数，旧版未完成安装已运行的小缓冲按现有热调整流程修复，不重启连接。
+普通 `install.py` 发布包升级不调用初始化和调优；已经完成的旧版 `bootstrap` 返回 `legacy-install-unchanged`，已有机器仍需显式启用。因此升级维护代码不会更改台湾、美国或其他现有服务器的内核参数，日本已持久化的修复继续保留。

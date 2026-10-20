@@ -118,6 +118,16 @@ class DomainTests(unittest.TestCase):
 if __name__=='__main__':unittest.main()
 
 class ReleaseTests(unittest.TestCase):
+    def test_maintenance_upgrade_never_calls_buffer_tuning(self):
+        import release,install,hashlib,udp_buffers
+        with tempfile.TemporaryDirectory() as d, \
+             patch.object(udp_buffers,'initialize_defaults',side_effect=AssertionError('unexpected initialization')) as initialize, \
+             patch.object(udp_buffers,'apply',side_effect=AssertionError('unexpected tuning')) as tune:
+            archive=release.package(Path(d)/'dist')
+            digest=hashlib.sha256(Path(archive).read_bytes()).hexdigest()
+            self.assertEqual(install.install(archive,digest,Path(d)/'install')['service_restarts'],0)
+            initialize.assert_not_called();tune.assert_not_called()
+
     def test_release_installs_idempotently_and_rejects_tampering(self):
         import release,install,hashlib
         with tempfile.TemporaryDirectory() as d:

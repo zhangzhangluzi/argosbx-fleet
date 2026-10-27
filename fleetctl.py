@@ -18,9 +18,21 @@ def remote(config,server,command,payload=None,allow_restart=False):
     return json.loads(p.stdout)
 
 def main():
-    p=argparse.ArgumentParser();p.add_argument('command',choices=['inspect','protocol-plan','protocol-apply','protocol-recover','domain-plan','domain-stage','domain-commit','domain-recover','xhttp-stage','xhttp-commit','xhttp-recover']);p.add_argument('--config');p.add_argument('--server',required=True);p.add_argument('--allow-restart',action='store_true');a=p.parse_args()
+    p=argparse.ArgumentParser();p.add_argument('command',choices=['inspect','protocol-plan','protocol-apply','protocol-recover','domain-plan','domain-stage','domain-commit','domain-recover','xhttp-stage','xhttp-commit','xhttp-recover','diagnose','certificate-audit','cf-audit']);p.add_argument('--config');p.add_argument('--server',required=True);p.add_argument('--allow-restart',action='store_true');p.add_argument('--observer');a=p.parse_args()
     config=read(a.config);server=servers(config)[a.server]
-    if a.command.startswith('xhttp-'):
+    if a.observer and a.command not in ('diagnose','certificate-audit'):raise ValueError('--observer 只用于独立诊断或证书验收')
+    if a.command in ('diagnose','certificate-audit','cf-audit'):
+        if a.allow_restart:raise ValueError('只读验收不接受 --allow-restart')
+        if a.command=='diagnose':
+            import diagnostics
+            result=diagnostics.run(config,server,remote,a.observer)
+        elif a.command=='certificate-audit':
+            import certificates
+            result=certificates.run(config,server,remote,a.observer)
+        else:
+            import cf_audit
+            result=cf_audit.audit(Cloudflare(str(__import__('fleet').resolve_path(config['cloudflare']['token_file']))),server)
+    elif a.command.startswith('xhttp-'):
         import tunnels
         cf=Cloudflare(config['cloudflare']['token_file']);journal=STATE/(a.server+'-xhttp-cf-journal.json')
         if a.command=='xhttp-stage':

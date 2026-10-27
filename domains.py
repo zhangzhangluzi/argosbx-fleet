@@ -6,7 +6,13 @@ import secrets
 from pathlib import Path
 from urllib.parse import urlencode
 import urllib.request
+import urllib.error
 from storage import save
+
+class CloudflareAPIError(RuntimeError):
+    def __init__(self,status=None,codes=()):
+        super().__init__('Cloudflare 请求失败，请检查 Token 权限和网络')
+        self.status=status;self.codes=tuple(codes)
 
 class Cloudflare:
     def __init__(self,token_file):
@@ -18,8 +24,15 @@ class Cloudflare:
         req=urllib.request.Request('https://api.cloudflare.com/client/v4'+path,data=None if body is None else json.dumps(body).encode(),method=method,headers={'Authorization':'Bearer '+self.token,'Content-Type':'application/json'})
         try:
             with urllib.request.urlopen(req,timeout=30) as r:result=json.load(r)
-        except Exception:raise RuntimeError('Cloudflare 请求失败，请检查 Token 权限和网络') from None
-        if not result.get('success'):raise RuntimeError('Cloudflare 拒绝请求')
+        except urllib.error.HTTPError as error:
+            try:
+                data=json.loads(error.read(16384));codes=[e['code'] for e in data.get('errors',[]) if isinstance(e.get('code'),int)]
+            except Exception:codes=[]
+            finally:error.close()
+            raise CloudflareAPIError(error.code,codes) from None
+        except Exception:raise CloudflareAPIError() from None
+        if not result.get('success'):
+            raise CloudflareAPIError(codes=[e['code'] for e in result.get('errors',[]) if isinstance(e.get('code'),int)])
         return result
     def zones(self):
         out=[];page=1

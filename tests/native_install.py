@@ -106,6 +106,30 @@ for n in nodes:
  result=probe.check_case({'name':ident,'node':n,'expected_ips':['127.0.0.1']},https_check=checked(probe_https),udp_check=checked(probe_udp))
  assert all(result[k] for k in ('https_ok','exit_ok','udp_ok')),result
  print('PASS onboarding HTTPS/UDP probe',ident,flush=True)
+# Same-key renewal must not pass when a listener still serves the old leaf.
+import certificates,diagnostics
+cert_path=Path(server['certificates']['domain']['certificate_file'])
+renewed=cert_path.with_name('renewal-fixture.crt')
+subprocess.run(['openssl','req','-x509','-key',server['certificates']['domain']['key_file'],'-days','3','-subj','/CN=ci.example.com','-addext','subjectAltName=DNS:ci.example.com','-out',str(renewed)],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+current_pin=certificates.leaf(cert_path)[1];future_pin=certificates.leaf(renewed)[1]
+assert current_pin!=future_pin
+for source in nodes:
+ if source['type']!='hysteria2':continue
+ node=copy.deepcopy(source);node['server']='127.0.0.1';node['_certificate_sha256']=current_pin
+ case={'node':node}
+ with probe.client_session(case) as port:assert probe_https(port)=='127.0.0.1'
+ node['_certificate_sha256']=future_pin
+ try:
+  with probe.client_session(case) as port:probe_https(port)
+ except OSError:pass
+ else:raise AssertionError('same-key stale certificate was accepted')
+ print('PASS native whole-leaf renewal pin',source['name'],flush=True)
+renewed.unlink()
+snapshot=diagnostics.snapshot(agent.load())
+assert any(s['transport']=='udp' for s in snapshot['sockets'])
+assert all(v['active'] for v in snapshot['services'].values())
+assert not snapshot['packet_capture_performed']
+print('PASS registered native socket evidence without mutation',flush=True)
 # Create/edit/delete a second same-type listener through installed agent interfaces.
 desired=copy.deepcopy(server['protocols']);desired['anytls_second']={**desired['anytls'],'type':'anytls','port':25447}
 assert agent.plan({'protocols':desired})['added']==['anytls_second']

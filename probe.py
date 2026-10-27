@@ -47,6 +47,22 @@ def xhttp_client(n,port):
     return {'log':{'loglevel':'warning'},'inbounds':[{'listen':'127.0.0.1','port':port,'protocol':'socks','settings':{'udp':True}}],
             'outbounds':[{'protocol':'vless','settings':{'vnext':[{'address':n['server'],'port':n['port'],'users':[{'id':n['uuid'],'encryption':n['encryption']}]}]},'streamSettings':stream}]}
 
+def certificate_client(n,port):
+    """Pin the whole leaf on an isolated HY2 client, including same-key renewals."""
+    fingerprint=n['_certificate_sha256']
+    if len(fingerprint)!=64 or any(c not in '0123456789abcdef' for c in fingerprint):
+        raise ValueError('证书 SHA256 无效')
+    tls={'serverName':n.get('sni',n.get('servername')),'pinnedPeerCertSha256':fingerprint,'alpn':n.get('alpn',['h3'])}
+    if n.get('ech-opts',{}).get('enable'):
+        tls['echConfigList']=n['ech-opts']['config']
+    stream={'network':'hysteria','security':'tls','tlsSettings':tls,
+            'hysteriaSettings':{'version':2,'auth':n['password']}}
+    if n.get('obfs'):
+        if n['obfs']!='salamander':raise ValueError('不支持的证书验收混淆')
+        stream['finalmask']={'udp':[{'type':'salamander','settings':{'password':n['obfs-password']}}]}
+    return {'log':{'loglevel':'error'},'inbounds':[{'listen':'127.0.0.1','port':port,'protocol':'socks','settings':{'udp':True}}],
+            'outbounds':[{'protocol':'hysteria','settings':{'version':2,'address':n['server'],'port':n['port']},'streamSettings':stream}]}
+
 def recv(sock,size):
     data=b''
     while len(data)<size:
@@ -124,9 +140,10 @@ def client_session(case,binary='/root/agsbx/sing-box'):
     with tempfile.TemporaryDirectory(prefix='fleet-probe-') as temp,reserved_port() as (port,release):
         root=Path(temp)
         is_xhttp=case['node'].get('network')=='xhttp'
-        config=xhttp_client(case['node'],port) if is_xhttp else {'log':{'level':'error'},'inbounds':[{'type':'socks','listen':'127.0.0.1','listen_port':port}], 'outbounds':outbound(case['node'])}
+        cert_probe=case['node'].get('_certificate_sha256') and case['node']['type']=='hysteria2'
+        config=certificate_client(case['node'],port) if cert_probe else xhttp_client(case['node'],port) if is_xhttp else {'log':{'level':'error'},'inbounds':[{'type':'socks','listen':'127.0.0.1','listen_port':port}], 'outbounds':outbound(case['node'])}
         # Hostname-based CF ingress must resolve without any local VPN or TUN dependency.
-        if is_xhttp:binary=str(Path(binary).with_name('xray'))
+        if is_xhttp or cert_probe:binary=str(Path(binary).with_name('xray'))
         else:
             config['dns']={'servers':[{'type':'https','tag':'local','server':'223.5.5.5','path':'/dns-query'},
                 {'type':'https','tag':'ech','server':'dns.alidns.com','path':'/dns-query','domain_resolver':'local'}],

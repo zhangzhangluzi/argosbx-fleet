@@ -22,7 +22,7 @@ flowchart LR
 sha256sum -c SHA256SUMS
 python3 install.py argosbx-fleet-v1.2.10.tar.gz --sha256 <已核对的SHA256>
 ```
-安装到 `/opt/argosbx-fleet/v1.2.10`，原子更新 `current` 符号链接。同一版本内容不可覆盖。升级使用相同命令；数据与凭据不在发布包内。
+安装到 `/opt/argosbx-fleet/<版本>`，原子更新 `current` 符号链接。同一版本内容不可覆盖。升级使用相同命令；数据与凭据不在发布包内。
 ## 配置入口
 复制 `templates/servers.example.json` 到私有路径，设置权限 0600；通过 `ARGOSBX_SERVERS_FILE` 指定。`ARGOSBX_WORKSPACE` 用于解析相对 SSH 路径；`ARGOSBX_STATE` 为计划和恢复日志目录。设置 `coordinator` 为运行 Sub-Store 的服务器 ID，使用该机原生 `flock` 排除跨工作站同时发布。每次 Sub-Store 请求前后检查锁连接；检测到连接断开就停止写入并保留恢复日志。它不提供服务端数据库 fencing，已在途的请求仍须回读确认。
 初次接管现有安装：向各 VPS `agent.py adopt` 标准输入传递 `{server_id, services}`；services 是原生配置完整路径到 systemd unit 的映射。程序读取实际端口、TLS 参数、凭据和源节点，校验两个内核并确认接管前后正式节点等价，再保存 `/etc/argosbx-fleet/server.json`。同类协议存在多个入站时拒绝自动猜测；需要先明确映射。
@@ -186,3 +186,13 @@ sudo python3 -B /opt/argosbx-fleet/current/udp_buffers.py inspect --service argo
 sudo python3 -B /opt/argosbx-fleet/current/udp_buffers.py apply --service argosbx-reality443 --effective-bytes 2097152
 ```
 必须确认实际接收缓冲不足后才应用；现有较大缓冲、发送缓冲、TCP 套接字保持不变。工具核对指定服务的真实二进制、PID、启动时间与 boot ID，事务保存服务身份，失败回滚和 `recover` 自动作用于该服务；旧版未记录服务名的事务仍按 `sb` 恢复。恢复仅针对最近一笔事务，不能另传 `--service` 改变恢复对象。无 UDP 套接字时拒绝应用，维护版本升级不会自动调优或重启代理。
+
+## v1.2.14：只读故障诊断、续期验收与 CF 权限
+```sh
+python3 fleetctl.py diagnose --config /private/servers.json --server jp
+python3 fleetctl.py certificate-audit --config /private/servers.json --server jp
+python3 fleetctl.py cf-audit --config /private/servers.json --server jp
+```
+诊断复用现有入站和独立 VPS 上的短期回环客户端，不新增公网端口、不调整防火墙、TUN、系统 DNS 或活动 VPN。`--observer tw` 可指定另一台具备所需 IP 地址族的已启用服务器；默认分别为 v4/v6 选择可用验收端。先读取本机监听、服务 PID 和累计网络计数，再分别验证 TCP 建连、原生协议 HTTPS、实际出口和 UDP 转发，最后对比丢包增量。TCP 承载的 UDP 转发与 HY2 的 UDP 入站分开报告；UDP 没有原生协议响应不能判定端口可用。未使用抓包时 SYN 到达位置和云防火墙状态明确标为未观察；海外 VPS 观察结果不能代替大陆运营商测试，也不能直接证明整个 IP 被封。仅采集现有套接字元数据，不采集业务载荷。
+证书验收检查有效期、名称、私钥、Caddy 管理存储及稳定文件引用，再从独立服务器与实际 TCP／QUIC 入口对比。AnyTLS 使用标准 TLS 验证并比对整张叶子证书 SHA256；HY2／Salamander 使用已有 Xray 二进制的隔离客户端，固定整张叶子指纹并完成认证与 HTTPS。没有新增服务协议、跳过证书验证或使用仅公钥指纹冒充续期验收。失败可能是路径或握手异常，不自动宣称旧证书，更不自动重启；命令不强制续期、不更换证书。`diagnostic-source` 为内部私有 SSH 数据，含节点认证信息，不应保存到公开日志；公开结果不包含节点凭据或私钥。
+CF 审计仅使用 GET：检查授权 zone、对应 DNS 记录与已有隧道配置；分别验证用户或账户 Token。能读取 Token 详细策略时核对目标资源范围、DNS／Tunnel 写权限声明、有效期和 IP 过滤；无策略读取权限时如实输出 `not_verified`。Token Verify 不证明资源写权限，读取成功也不证明 DNS Edit；策略声明不等于执行过真实写操作。纯 DNS-01 可使用指定 Zone ID 的限定 DNS Edit Token，Fleet 域名发现和固定隧道管理还需要 Zone Read／Tunnel Edit。管理 Token 只在控制机 0600 文件读取，不上传 VPS；实际 API 请求出口未观察时不会声称白名单匹配。现有服务不因审计失败而停止。

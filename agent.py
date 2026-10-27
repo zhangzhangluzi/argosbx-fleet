@@ -270,7 +270,7 @@ def certificate_recover():
     journal.unlink();return {'recovered':True}
 
 def main():
-    p=argparse.ArgumentParser();p.add_argument('command',choices=['adopt','inspect','plan','planned','apply','commit','recover','export','certificate','certificate-recover','xhttp-stage','xhttp-candidate','xhttp-commit','xhttp-recover']);p.add_argument('--allow-restart',action='store_true');p.add_argument('--defer-commit',action='store_true');a=p.parse_args()
+    p=argparse.ArgumentParser();p.add_argument('command',choices=['adopt','inspect','plan','planned','apply','commit','recover','export','certificate','certificate-recover','xhttp-stage','xhttp-candidate','xhttp-commit','xhttp-recover','network-snapshot','certificate-snapshot','diagnostic-source']);p.add_argument('--allow-restart',action='store_true');p.add_argument('--defer-commit',action='store_true');a=p.parse_args()
     with lock(HOME/'agent.lock'):
         if a.command.startswith('xhttp-'):
             import xhttp
@@ -287,6 +287,18 @@ def main():
             r['source_matches']=TARGET.exists() and yaml.safe_load(TARGET.read_text())==export(configs(s),s) if r['native_configuration_matches'] else False
             r['certificate_health']=certificate_health(s)
             r['cloudflare_health']=cloudflare_health(s)
+        elif a.command in ('network-snapshot','certificate-snapshot','diagnostic-source'):
+            import diagnostics,certificates
+            s=load()
+            if a.command=='network-snapshot':r=diagnostics.snapshot(s)
+            else:
+                request=json.loads(sys.stdin.read() or '{}')
+                if a.command=='certificate-snapshot':r=certificates.snapshot(s,certificate_health(s),http_hosts=request.get('http_hosts',[]))
+                else:
+                    if list(HOME.glob('*journal.json')) or any(sha(Path(p).read_text())!=h for p,h in s['native_sha256'].items()):
+                        raise ValueError('配置漂移或未完成事务；不能构造可信诊断源')
+                    r={'nodes':export(configs(s),s)['proxies'],'snapshot':diagnostics.snapshot(s),
+                       'certificates':certificates.snapshot(s,certificate_health(s),http_hosts=request.get('http_hosts',[]))}
         elif a.command=='plan':r=plan(json.load(sys.stdin))
         elif a.command=='planned':r=planned()
         elif a.command=='apply':r=apply(a.allow_restart,a.defer_commit)

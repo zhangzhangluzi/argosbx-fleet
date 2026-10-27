@@ -1,5 +1,9 @@
 """Audit scoped Cloudflare access using GET only; never test writes on real DNS."""
 import re
+import json
+import hashlib
+import datetime
+from pathlib import Path
 from urllib.parse import urlencode
 
 from protocols import protocol_type
@@ -37,7 +41,33 @@ def declared_permission(metadata,permission,account,zone=None):
     return 'declared_granted' if allowed else 'not_granted'
 
 
-def audit(cf,server):
+def snapshot_metadata(cf,token_id,path,now=None):
+    """A fresh dashboard observation supplements, never impersonates, token API access."""
+    path=Path(path).expanduser()
+    if path.stat().st_mode&0o077:raise ValueError('policy_snapshot_not_private')
+    value=json.loads(path.read_text());metadata=value.get('metadata',{})
+    if value.get('schema')!=1 or value.get('source')!='cloudflare-dashboard':raise ValueError('policy_snapshot_invalid')
+    if metadata.get('id')!=token_id or value.get('token_sha256')!=hashlib.sha256(cf.token.encode()).hexdigest():raise ValueError('policy_snapshot_identity_mismatch')
+    observed=datetime.datetime.fromisoformat(value['observed_at'].replace('Z','+00:00'))
+    if observed.tzinfo is None:raise ValueError('policy_snapshot_time_invalid')
+    age=((now or datetime.datetime.now(datetime.timezone.utc))-observed).total_seconds()
+    if not -60<=age<=86400:raise ValueError('policy_snapshot_expired')
+    if not isinstance(metadata.get('policies'),list):raise ValueError('policy_snapshot_invalid')
+    return metadata,value['observed_at']
+
+
+def ip_restrictions(metadata):
+    condition=metadata.get('condition') or {}
+    # The REST schema uses request_ip; older clients also expose request.ip.
+    value=condition.get('request_ip',condition.get('request.ip',{})) or {}
+    if not isinstance(value,dict):raise ValueError('invalid_ip_condition')
+    return {'configured':bool(value.get('in') or value.get('not_in')),
+            'mode':'restricted' if value.get('in') or value.get('not_in') else 'allow_all',
+            'allowed_ranges':value.get('in',[]),'excluded_ranges':value.get('not_in',[]),
+            'actual_api_source_ip':'not_observed','compromised_allowed_host_still_risky':True}
+
+
+def audit(cf,server,policy_file=None):
     result={'server':server['id'],'read_only':True,'writes_tested':False,
             'token':{'status':'not_verified'},'zones':[],'metadata_read':False,
             'requirements':{'certificate_dns01':['Zone DNS Edit for selected zone + explicit Zone ID'],
@@ -65,13 +95,21 @@ def audit(cf,server):
             token=value;owner=base;result['token']={k:value[k] for k in ('status','expires_on','not_before') if k in value};break
         except RuntimeError as error:result['token']['verify_error']=failure(error)
     metadata=None
-    if token and re.fullmatch(r'[a-fA-F0-9]{32}',str(token.get('id',''))):
+    if policy_file and token:
         try:
-            metadata=cf.call(owner+'/'+token['id'])['result'];result['metadata_read']=True
-            condition=metadata.get('condition',{}).get('request.ip',{})
-            result['source_ip_filter']={'configured':bool(condition),'allowed_ranges':condition.get('in',[]),'excluded_ranges':condition.get('not_in',[]),
-                                        'actual_api_source_ip':'not_observed','compromised_allowed_host_still_risky':True}
-        except RuntimeError as error:result['metadata_error']=failure(error)
+            metadata,observed=snapshot_metadata(cf,token['id'],policy_file)
+            result.update(metadata_source='dashboard_snapshot',policy_observed_at=observed,snapshot_max_age_seconds=86400,
+                          metadata_api_skipped='using_bound_dashboard_snapshot')
+        except (OSError,ValueError,KeyError,TypeError) as error:
+            result['snapshot_error']=str(error) if type(error) is ValueError else type(error).__name__
+    if metadata is None and token and re.fullmatch(r'[a-fA-F0-9]{32}',str(token.get('id',''))):
+        try:
+            metadata=cf.call(owner+'/'+token['id'])['result'];result['metadata_read']=True;result['metadata_source']='token_api'
+        except RuntimeError as error:
+            result['metadata_error']=failure(error)
+            if getattr(error,'status',None)==403 and 9109 in getattr(error,'codes',()):
+                result['metadata_error'].update(reason='token_management_read_not_granted',required_permission='API Tokens Read' if owner=='/user/tokens' else 'Account API Tokens Read')
+    if metadata is not None:result['source_ip_filter']=ip_restrictions(metadata)
     if metadata is None:result['source_ip_filter']={'configured':None,'status':'not_verified'}
     tunnels={}
     for zone,zone_hosts in matched.values():

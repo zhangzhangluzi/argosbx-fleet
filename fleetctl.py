@@ -18,11 +18,12 @@ def remote(config,server,command,payload=None,allow_restart=False):
     return json.loads(p.stdout)
 
 def main():
-    p=argparse.ArgumentParser();p.add_argument('command',choices=['inspect','protocol-plan','protocol-apply','protocol-recover','domain-plan','domain-stage','domain-commit','domain-recover','xhttp-stage','xhttp-commit','xhttp-recover','diagnose','certificate-audit','cf-audit']);p.add_argument('--config');p.add_argument('--server',required=True);p.add_argument('--allow-restart',action='store_true');p.add_argument('--observer');a=p.parse_args()
+    p=argparse.ArgumentParser();p.add_argument('command',choices=['inspect','protocol-plan','protocol-apply','protocol-recover','domain-plan','domain-stage','domain-commit','domain-recover','xhttp-stage','xhttp-commit','xhttp-recover','diagnose','certificate-audit','cf-audit']);p.add_argument('--config');p.add_argument('--server',required=True);p.add_argument('--allow-restart',action='store_true');p.add_argument('--observer');checks=p.add_mutually_exclusive_group();checks.add_argument('--verify-writes',action='store_true');checks.add_argument('--recover-writes',action='store_true');a=p.parse_args()
     config=read(a.config);server=servers(config)[a.server]
     if a.observer and a.command not in ('diagnose','certificate-audit'):raise ValueError('--observer 只用于独立诊断或证书验收')
+    if (a.verify_writes or a.recover_writes) and a.command!='cf-audit':raise ValueError('写权限验证只适用于 cf-audit')
     if a.command in ('diagnose','certificate-audit','cf-audit'):
-        if a.allow_restart:raise ValueError('只读验收不接受 --allow-restart')
+        if a.allow_restart:raise ValueError('维护验收不接受 --allow-restart')
         if a.command=='diagnose':
             import diagnostics
             result=diagnostics.run(config,server,remote,a.observer)
@@ -30,8 +31,17 @@ def main():
             import certificates
             result=certificates.run(config,server,remote,a.observer)
         else:
-            import cf_audit
-            result=cf_audit.audit(Cloudflare(str(__import__('fleet').resolve_path(config['cloudflare']['token_file']))),server)
+            import cf_audit,cf_probe
+            from fleet import resolve_path
+            cf=Cloudflare(str(resolve_path(config['cloudflare']['token_file'])))
+            journal=STATE/(a.server+'-cf-permission-check.json')
+            if a.recover_writes:result={**cf_probe.recover(cf,journal),'read_only':False}
+            else:
+                policy=config['cloudflare'].get('policy_snapshot')
+                result=cf_audit.audit(cf,server,resolve_path(policy) if policy else None)
+                if a.verify_writes:
+                    result['write_verification']=cf_probe.verify(cf,server,journal)
+                    result['writes_tested']=True;result['read_only']=False
     elif a.command.startswith('xhttp-'):
         import tunnels
         cf=Cloudflare(config['cloudflare']['token_file']);journal=STATE/(a.server+'-xhttp-cf-journal.json')

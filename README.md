@@ -196,3 +196,13 @@ python3 fleetctl.py cf-audit --config /private/servers.json --server jp
 诊断复用现有入站和独立 VPS 上的短期回环客户端，不新增公网端口、不调整防火墙、TUN、系统 DNS 或活动 VPN。`--observer tw` 可指定另一台具备所需 IP 地址族的已启用服务器；默认分别为 v4/v6 选择可用验收端。先读取本机监听、服务 PID 和累计网络计数，再分别验证 TCP 建连、原生协议 HTTPS、实际出口和 UDP 转发，最后对比丢包增量。TCP 承载的 UDP 转发与 HY2 的 UDP 入站分开报告；UDP 没有原生协议响应不能判定端口可用。未使用抓包时 SYN 到达位置和云防火墙状态明确标为未观察；海外 VPS 观察结果不能代替大陆运营商测试，也不能直接证明整个 IP 被封。仅采集现有套接字元数据，不采集业务载荷。
 证书验收检查有效期、名称、私钥、Caddy 管理存储及稳定文件引用，再从独立服务器与实际 TCP／QUIC 入口对比。AnyTLS 使用标准 TLS 验证并比对整张叶子证书 SHA256；HY2／Salamander 使用已有 Xray 二进制的隔离客户端，固定整张叶子指纹并完成认证与 HTTPS。没有新增服务协议、跳过证书验证或使用仅公钥指纹冒充续期验收。失败可能是路径或握手异常，不自动宣称旧证书，更不自动重启；命令不强制续期、不更换证书。`diagnostic-source` 为内部私有 SSH 数据，含节点认证信息，不应保存到公开日志；公开结果不包含节点凭据或私钥。
 CF 审计仅使用 GET：检查授权 zone、对应 DNS 记录与已有隧道配置；分别验证用户或账户 Token。能读取 Token 详细策略时核对目标资源范围、DNS／Tunnel 写权限声明、有效期和 IP 过滤；无策略读取权限时如实输出 `not_verified`。Token Verify 不证明资源写权限，读取成功也不证明 DNS Edit；策略声明不等于执行过真实写操作。纯 DNS-01 可使用指定 Zone ID 的限定 DNS Edit Token，Fleet 域名发现和固定隧道管理还需要 Zone Read／Tunnel Edit。管理 Token 只在控制机 0600 文件读取，不上传 VPS；实际 API 请求出口未观察时不会声称白名单匹配。现有服务不因审计失败而停止。
+
+## v1.2.15：CF 策略来源与独立写入验收
+`GET /user/tokens/{id}` 需要 User API Tokens Read/Write，账户 Token 详情接口需要 Account API Tokens Read/Write。Token 有效、DNS/Tunnel 授权正常时，这个独立接口仍可返回 403／9109；不应为消除该提示扩大部署令牌权限，也不应将它误判为 VPN、DNS 或隧道故障。
+可在控制机私有 inventory 的 `cloudflare.policy_snapshot` 引用 0600 JSON：`schema:1`、`source:cloudflare-dashboard`、`observed_at`（带时区）、`token_sha256` 和 `metadata`（包括通过控制台核对的 Token `id`、`condition`、`policies`）。必须核对实际 Token ID，而非仅凭名称；快照超过 24 小时、凭据不同或 ID 不符会退回未验证，不自动刷新时间。快照不包含 Token 值，不上传 VPS、不纳入发布包。结果区分 API 与控制台快照来源；`request_ip` 与旧版 `request.ip` 均可解析，空条件明确表示允许所有 IP。此项不自动开启 IP 白名单：应先明确控制机实际且稳定的 API 出口，避免切换 VPN 后锁死管理。
+默认 `cf-audit` 仍只读。需要实际验证写权限时，显式运行：
+```sh
+python3 fleetctl.py cf-audit --config /private/servers.json --server us --verify-writes
+python3 fleetctl.py cf-audit --config /private/servers.json --server us --recover-writes
+```
+测试只创建随机命名的独立 TXT 和测试隧道；后者仅配置 `http_status:404`，不启动连接器、不申请连接凭据、不建立 DNS 路由。分别回读 DNS 创建／更新、隧道创建／配置，再删除并确认清理。正式 DNS、已有隧道和订阅不修改。同一授权 zone/account 只需验证一次；这是该次请求的证据，不保证未来授权不变。写前保存 0600 恢复日志，响应丢失可通过唯一名称与标记定位；第三方修改 TXT 或测试隧道出现连接器时拒绝删除并保留日志。

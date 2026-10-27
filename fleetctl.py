@@ -33,7 +33,7 @@ def main():
         else:
             import cf_audit,cf_probe
             from fleet import resolve_path
-            cf=Cloudflare(str(resolve_path(config['cloudflare']['token_file'])))
+            cf=Cloudflare.from_config(config)
             journal=STATE/(a.server+'-cf-permission-check.json')
             if a.recover_writes:result={**cf_probe.recover(cf,journal),'read_only':False}
             else:
@@ -44,7 +44,7 @@ def main():
                     result['writes_tested']=True;result['read_only']=False
     elif a.command.startswith('xhttp-'):
         import tunnels
-        cf=Cloudflare(config['cloudflare']['token_file']);journal=STATE/(a.server+'-xhttp-cf-journal.json')
+        cf=Cloudflare.from_config(config);journal=STATE/(a.server+'-xhttp-cf-journal.json')
         if a.command=='xhttp-stage':
             previous=remote(config,a.server,'inspect')['protocols']
             result=remote(config,a.server,'xhttp-stage',server['protocols']['xhttp'])
@@ -79,7 +79,7 @@ def main():
         cf_changed=tunnels.routes({'protocols':previous})!=tunnels.routes(server)
         cf=None;cf_journal=STATE/(a.server+'-protocol-cf.json')
         if cf_changed:
-            cf=Cloudflare(config['cloudflare']['token_file'])
+            cf=Cloudflare.from_config(config)
             if cf_journal.exists():raise ValueError('CF 入站有未完成事务，先执行 protocol-recover')
             cf_plan=tunnels.change_plan(cf,server,previous)
             if cf_plan:
@@ -95,7 +95,7 @@ def main():
         cf_journal=STATE/(a.server+'-protocol-cf.json')
         result=remote(config,a.server,'recover',allow_restart=a.allow_restart)
         if cf_journal.exists():
-            cf=Cloudflare(config['cloudflare']['token_file'])
+            cf=Cloudflare.from_config(config)
             # If the native apply committed but its SSH reply was lost, keep the matching routes.
             current=remote(config,a.server,'inspect')['protocols']
             saved=json.loads(cf_journal.read_text())['plan']
@@ -104,7 +104,7 @@ def main():
             else:raise ValueError('原生入站被其他操作修改，保留 CF 恢复日志')
     else:
         domain_plan=STATE/(a.server+'-domain-plan.json');journal=STATE/(a.server+'-domain-journal.json')
-        cf=Cloudflare(config['cloudflare']['token_file'])
+        cf=Cloudflare.from_config(config)
         if a.command=='domain-plan':
             if journal.exists():raise ValueError('域名迁移未完成，请先恢复；未覆盖原计划')
             desired=server['domain_migration'];plan=build(cf,desired['zone'],server,desired['names'],desired['tunnel_id'])

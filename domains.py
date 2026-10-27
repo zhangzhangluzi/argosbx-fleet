@@ -15,12 +15,35 @@ class CloudflareAPIError(RuntimeError):
         self.status=status;self.codes=tuple(codes)
 
 class Cloudflare:
-    def __init__(self,token_file):
+    def __init__(self,token_file,transport=None):
         p=Path(token_file).expanduser()
         if p.stat().st_mode&0o077:raise ValueError('CF Token 文件权限必须为 0600')
         self.token=p.read_text().strip()
         if not self.token:raise ValueError('CF Token 为空')
+        self.transport=transport
+    @classmethod
+    def from_config(cls,config):
+        from fleet import resolve_path
+        settings=config['cloudflare'];transport=None
+        if settings.get('management_server') is not None:
+            from cf_transport import SSHTransport
+            transport=SSHTransport(config,settings['management_server'])
+        return cls(resolve_path(settings['token_file']),transport)
+    def close(self):
+        if self.transport:self.transport.close()
+    def transport_info(self):
+        return self.transport.info() if self.transport else {'mode':'direct','verified':False}
     def call(self,path,body=None,method=None):
+        if not isinstance(path,str) or not path.startswith('/') or path.startswith('//') or any(c in path for c in ('\r','\n','#')):raise ValueError('无效 CF API 路径')
+        if self.transport:
+            try:
+                status,raw=self.transport.request('/client/v4'+path,method or ('POST' if body is not None else 'GET'),
+                    None if body is None else json.dumps(body).encode(),{'Authorization':'Bearer '+self.token,'Content-Type':'application/json'})
+                result=json.loads(raw)
+            except Exception:raise CloudflareAPIError() from None
+            codes=[e['code'] for e in result.get('errors',[]) if isinstance(e,dict) and isinstance(e.get('code'),int)]
+            if not 200<=status<300 or not result.get('success'):raise CloudflareAPIError(status,codes)
+            return result
         req=urllib.request.Request('https://api.cloudflare.com/client/v4'+path,data=None if body is None else json.dumps(body).encode(),method=method,headers={'Authorization':'Bearer '+self.token,'Content-Type':'application/json'})
         try:
             with urllib.request.urlopen(req,timeout=30) as r:result=json.load(r)

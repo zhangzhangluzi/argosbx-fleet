@@ -206,3 +206,8 @@ python3 fleetctl.py cf-audit --config /private/servers.json --server us --verify
 python3 fleetctl.py cf-audit --config /private/servers.json --server us --recover-writes
 ```
 测试只创建随机命名的独立 TXT 和测试隧道；后者仅配置 `http_status:404`，不启动连接器、不申请连接凭据、不建立 DNS 路由。分别回读 DNS 创建／更新、隧道创建／配置，再删除并确认清理。正式 DNS、已有隧道和订阅不修改。同一授权 zone/account 只需验证一次；这是该次请求的证据，不保证未来授权不变。写前保存 0600 恢复日志，响应丢失可通过唯一名称与标记定位；第三方修改 TXT 或测试隧道出现连接器时拒绝删除并保留日志。
+
+## v1.2.16：固定 CF 管理出口
+私有 inventory 增加 `"cloudflare": {"token_file":"/private/cloudflare.token", "management_server":"us"}`，其中 ID 必须对应已启用且有 IPv4 的服务器。`fleetctl` 的审计、DNS／域名迁移、隧道管理和 `onboard` 的域名发现／初始化统一使用该出口。没有配置此字段的旧安装保持原直接请求行为；配置后通道失败会停止，不降级为本机请求。
+控制机使用已有可信 SSH 密钥与 known_hosts 创建独立、短期本地转发，仅监听 `127.0.0.1` 随机端口，不复用可能残留转发的共享 SSH master。CF API 的 A 记录由出口机器解析，控制机到 `api.cloudflare.com` 的 TLS 完整穿过 SSH 通道；服务端不会接收明文管理令牌或保存令牌文件。请求不跟随重定向，不能借此转发到任意其他站点。启动时先访问同通道无认证的 `/cdn-cgi/trace`，源 IPv4 必须与 inventory 中该机器 IPv4 相同，随后才发送令牌。审计的 `management_transport` 和 `source_ip_filter` 分别给出实测出口与白名单匹配结果。
+应先升级并验收该通道，再在 Cloudflare 控制台将现有管理令牌的允许来源收窄至出口 IPv4 的 `/32`。保留原权限和令牌值；刷新绑定策略快照后，从允许出口验证真实资源读写、从另一台独立机器验证资源请求被拒绝。Token Verify 接口不受 IP 过滤约束，不能用它验证拒绝效果。只约束管理令牌，不改变 cloudflared 的独立连接凭据、代理节点或订阅。程序退出时清理自有 SSH 进程；临时转发不对局域网或公网开放。

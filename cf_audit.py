@@ -3,6 +3,7 @@ import re
 import json
 import hashlib
 import datetime
+import ipaddress
 from pathlib import Path
 from urllib.parse import urlencode
 
@@ -76,10 +77,12 @@ def audit(cf,server,policy_file=None):
     hosts|={p['sni'] for p in server['protocols'].values() if p['enabled'] and p.get('certificate')}
     cf_hosts={p['sni'] for ident,p in server['protocols'].items() if p['enabled'] and protocol_type(ident,p) in ('cf','xhttp')}
     hosts|=cf_hosts
+    transport_info=lambda:getattr(cf,'transport_info',lambda:{'mode':'external','verified':False})()
     try:zones=cf.zones()
     except RuntimeError as error:
-        result['zone_access']=failure(error);result['status']='needs_attention'
+        result['zone_access']=failure(error);result['status']='needs_attention';result['management_transport']=transport_info()
         return result
+    result['management_transport']=transport_info()
     matched={}
     for host in sorted(hosts):
         found=sorted((z for z in zones if host==z['name'] or host.endswith('.'+z['name'])),key=lambda z:len(z['name']),reverse=True)
@@ -111,6 +114,15 @@ def audit(cf,server,policy_file=None):
                 result['metadata_error'].update(reason='token_management_read_not_granted',required_permission='API Tokens Read' if owner=='/user/tokens' else 'Account API Tokens Read')
     if metadata is not None:result['source_ip_filter']=ip_restrictions(metadata)
     if metadata is None:result['source_ip_filter']={'configured':None,'status':'not_verified'}
+    observed=result['management_transport'].get('observed_ipv4')
+    if observed and result['management_transport'].get('verified') and metadata is not None:
+        policy=result['source_ip_filter'];policy['actual_api_source_ip']=observed
+        address=ipaddress.ip_address(observed)
+        try:
+            allowed=not policy['allowed_ranges'] or any(address in ipaddress.ip_network(v,strict=False) for v in policy['allowed_ranges'])
+            denied=any(address in ipaddress.ip_network(v,strict=False) for v in policy['excluded_ranges'])
+            policy['observed_source_allowed']=allowed and not denied
+        except ValueError:policy['observed_source_allowed']=None
     tunnels={}
     for zone,zone_hosts in matched.values():
         account=zone['account']['id'];row={'name':zone['name'],'active':zone.get('status')=='active','dns':[],

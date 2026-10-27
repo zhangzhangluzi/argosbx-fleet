@@ -59,7 +59,7 @@ def install(config,ident):
     upload_tools(config,ident)
     prefix=['python3','-B','/opt/argosbx-fleet/current/bootstrap.py']
     check=json.loads(command(config,ident,prefix+['preflight'],json.dumps({'server':server})))
-    cf=Cloudflare(config['cloudflare']['token_file'])
+    cf=Cloudflare.from_config(config)
     journal=STATE/(ident+'-onboarding.json')
     connection=tunnels.provision(cf,server,server['onboarding']['zone'],journal)
     result=json.loads(command(config,ident,prefix+['install'],json.dumps({'server':server,'connector_token':connection['connector_token']}),timeout=900))
@@ -99,12 +99,12 @@ def main():
     p=argparse.ArgumentParser();p.add_argument('command',choices=['zones','add','install']);p.add_argument('--config',default=str(DEFAULT));p.add_argument('--server');p.add_argument('--country');p.add_argument('--country-name');p.add_argument('--ipv4');p.add_argument('--ipv6');p.add_argument('--zone');p.add_argument('--ssh-key');p.add_argument('--known-hosts');a=p.parse_args()
     config=read(a.config);os.environ['ARGOSBX_SERVERS_FILE']=str(Path(a.config).resolve())
     if a.command=='zones':
-        return {'zones':[{'name':z['name'],'account':z['account']['name'],'active':z['status']=='active'} for z in Cloudflare(config['cloudflare']['token_file']).zones()]}
+        return {'zones':[{'name':z['name'],'account':z['account']['name'],'active':z['status']=='active'} for z in Cloudflare.from_config(config).zones()]}
     if not a.server:raise ValueError('需要 --server')
     if a.command=='install':return install(config,a.server)
     if any(not getattr(a,k) for k in ('country','country_name','ipv4','zone','ssh_key','known_hosts')):raise ValueError('add 需要国家、IP、域名、SSH 密钥和可信 known_hosts')
     if a.server in servers(config):raise ValueError('服务器 ID 已存在')
-    tunnels.discover(Cloudflare(config['cloudflare']['token_file']),a.zone)
+    tunnels.discover(Cloudflare.from_config(config),a.zone)
     added=defaults(a.server,a.country,a.country_name,a.ipv4,a.ipv6,a.zone,a.ssh_key,a.known_hosts)
     used={s['name'] for s in config['servers']};suffix=2
     while added['name'] in used:

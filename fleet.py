@@ -83,6 +83,11 @@ def validate(data):
     if not isinstance(data['purpose_order'], list) or len(set(data['purpose_order'])) != len(data['purpose_order']):
         raise ValueError('purpose_order 必须为不重复的国家代码列表')
     if set(data['purpose_order']) != set(regions): raise ValueError('purpose_order 必须包含所有国家且只包含已有国家')
+    relay=data.get('cloudflare',{}).get('management_server')
+    if relay is not None:
+        selected=next((s for s in data['servers'] if s['id']==relay),None)
+        if not isinstance(relay,str) or not selected or selected.get('status','active')!='active' or not selected.get('ipv4'):
+            raise ValueError('cloudflare.management_server 必须引用已启用且有 IPv4 的服务器')
     interval=data.get('health',{}).get('interval',900)
     if type(interval) is not int or interval not in (900,1800): raise ValueError('health.interval 只支持 900 或 1800 秒')
     tolerance=data.get('health',{}).get('tolerance',100)

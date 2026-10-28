@@ -37,7 +37,7 @@ print('PASS default new-host UDP buffers, persistence, real sockets and resume w
 identity=lambda:{u:agent.cmd(['systemctl','show',u,'-p','MainPID','--value']) for u in ['xr','sb','caddy-sub','argo']}
 dependency_pids=identity()
 dependency=json.loads(subprocess.run(['python3','-B','/opt/argosbx-fleet/current/agent.py','dependency-snapshot'],input=json.dumps({'management_sha256':'0'*64,'probe_acme':False}),text=True,capture_output=True,check=True,timeout=45).stdout)
-assert dependency['read_only'] and dependency['native_matches'] and not dependency['forced_renewal'] and not dependency['services_reloaded']
+assert dependency['read_only'] and dependency['native_matches'] and dependency['source_matches'] and not dependency['forced_renewal'] and not dependency['services_reloaded']
 assert not dependency['connector']['credential_found'] and 'ci-fixture-only' not in json.dumps(dependency)
 assert identity()==dependency_pids and before=={p:Path(p).read_bytes() for p in before}
 print('PASS installed dependency snapshot, unknown connector evidence and process preservation',flush=True)

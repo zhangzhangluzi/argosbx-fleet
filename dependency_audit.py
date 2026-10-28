@@ -139,6 +139,7 @@ def snapshot(state, management_sha256, probe_acme=True, root=Path('/proc')):
 def local_checks(value):
     issues=[];caddy=value.get('caddy',{});connector=value.get('connector',{})
     if not value.get('native_matches'):issues.append('native_configuration_drift')
+    if value.get('source_matches') is not True:issues.append('native_source_not_verified')
     if any(v.get('ActiveState')!='active' or v.get('MainPID','0')=='0' for v in value['protected']['processes'].values()):issues.append('service_not_running')
     if not caddy.get('hosts') or not caddy.get('policies'):issues.append('caddy_automation_not_verified')
     if caddy.get('automatic_https_disabled') or caddy.get('manual_certificate_loaders'):issues.append('manual_or_disabled_certificate_management')
@@ -265,7 +266,7 @@ def run(config,targets,remote,verify_writes=False):
             'dependencies':{'renewal':'per-host certificate manager','cf_management':'configured SSH egress; no direct fallback','tunnel_runtime':'per-tunnel connector credential'},
             'management_relay_outage':'CF API maintenance stops; HTTP-01 renewal and separate connector credentials are independent only when their checks pass'}
     if not config.get('cloudflare',{}).get('management_server'):raise ValueError('依赖验收需要先配置 cloudflare.management_server；不会使用本机出口')
-    cf=Cloudflare.from_config(config);digest=hashlib.sha256(cf.token.encode()).hexdigest();write_scopes={}
+    cf=Cloudflare.from_config(config);digest=hashlib.sha256(cf.token.encode()).hexdigest();write_scopes={};write_owners={}
     try:
         positive=_checked(lambda:{'passed':bool(cf.zones()),'transport':cf.transport_info()})
         info=positive.get('transport',{});positive['passed']=positive.get('passed') and info.get('verified') is True and info.get('direct_fallback') is False
@@ -291,10 +292,12 @@ def run(config,targets,remote,verify_writes=False):
                     zones=cf_probe.zones_for(cf,server);scope=tuple(sorted((z['id'],z['account']['id']) for z in zones))
                     if scope not in write_scopes:
                         result['writes_tested']=True
-                        write_scopes[scope]=cf_probe.verify(cf,server,STATE/(sid+'-cf-permission-check.json'))
+                        write_owners[scope]=sid
+                        write_scopes[scope]=_checked(lambda:cf_probe.verify(cf,server,STATE/(sid+'-cf-permission-check.json')))
+                    row['write_recovery_command']='fleetctl.py cf-audit --server '+write_owners[scope]+' --recover-writes'
                     return write_scopes[scope]
                 row['write_access']=_checked(writes)
-                row['write_recovery_command']='fleetctl.py cf-audit --server '+sid+' --recover-writes'
+                row.setdefault('write_recovery_command','fleetctl.py cf-audit --server '+sid+' --recover-writes')
             else:row['write_access']={'passed':None if not verify_writes else False,'status':'not_tested' if not verify_writes else 'source_preflight_failed'}
             after=_checked(lambda:remote(config,sid,'dependency-snapshot',{**payload,'probe_acme':False}))
             row['protected_state_preserved']=bool(before.get('protected')) and before.get('protected')==after.get('protected')

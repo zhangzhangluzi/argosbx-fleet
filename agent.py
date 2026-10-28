@@ -292,8 +292,9 @@ def main():
             if a.allow_restart or a.defer_commit:raise ValueError('依赖快照只读，不接受重启或提交选项')
             if list(HOME.glob('*journal.json')):raise ValueError('存在未完成事务，暂不构造依赖验收快照')
             request=json.loads(sys.stdin.read() or '{}')
-            r=dependency_audit.snapshot(load(),request.get('management_sha256'),request.get('probe_acme',True))
+            state=load();r=dependency_audit.snapshot(state,request.get('management_sha256'),request.get('probe_acme',True))
             r['protected']['source_sha256']=sha(TARGET.read_text()) if TARGET.exists() else None
+            r['source_matches']=TARGET.exists() and yaml.safe_load(TARGET.read_text())==export(configs(state),state) if r['native_matches'] else False
         elif a.command in ('network-snapshot','certificate-snapshot','diagnostic-source'):
             import diagnostics,certificates
             s=load()

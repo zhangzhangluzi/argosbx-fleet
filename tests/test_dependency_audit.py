@@ -18,7 +18,7 @@ import acceptance,certificates,cf_audit,cf_probe,cf_transport,dependency_audit a
 
 
 def healthy():
-    return {'native_matches':True,'protected':{'processes':{'caddy-sub.service':{'MainPID':'10','ActiveState':'active'}},'native_sha256':{'fixture':'digest'}},
+    return {'native_matches':True,'source_matches':True,'protected':{'processes':{'caddy-sub.service':{'MainPID':'10','ActiveState':'active'}},'native_sha256':{'fixture':'digest'}},
             'caddy':{'hosts':['jp.example.com'],'policies':[{'issuers':[{'http01_enabled':True,'dns01_enabled':False}]}],
                      'storage_writable':True,'storage_supported':True,'ca_directories':[{'passed':True}]},
             'certificate_reload':[{'file_reference':True,'hot_reload':True}],
@@ -133,6 +133,12 @@ class ControllerTests(unittest.TestCase):
         self.verify.side_effect=TimeoutError('PRIVATE')
         value=audit.run(self.config,[self.server],self.remote,True)
         self.assertFalse(value['passed']);self.assertTrue(value['writes_tested']);self.assertNotIn('PRIVATE',json.dumps(value))
+
+    def test_uncertain_write_failure_is_not_retried_for_other_hosts_in_same_scope(self):
+        self.verify.side_effect=TimeoutError('PRIVATE');second=copy.deepcopy(self.server);second['id']='second'
+        result=audit.run(self.config,[self.server,second],self.remote,True)
+        self.assertFalse(result['passed']);self.assertEqual(self.verify.call_count,1)
+        self.assertEqual(result['servers'][0]['write_recovery_command'],result['servers'][1]['write_recovery_command'])
 
     def test_relay_failure_does_not_skip_independent_certificate_checks_or_send_writes(self):
         self.cf.zones.side_effect=OSError('PRIVATE')

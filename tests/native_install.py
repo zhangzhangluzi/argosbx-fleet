@@ -32,6 +32,15 @@ with patch.object(bootstrap,'unit',unit):bootstrap.install(server,'ci-fixture-on
 assert before=={p:Path(p).read_bytes() for p in before}
 assert buffer_files=={p:p.read_bytes() for p in buffer_files} and udp_buffers.service()==buffer_pid
 print('PASS default new-host UDP buffers, persistence, real sockets and resume without restart',flush=True)
+# Exercise the installed, read-only dependency command with an intentionally
+# unauthenticated CI connector; it must report unknown rather than success.
+identity=lambda:{u:agent.cmd(['systemctl','show',u,'-p','MainPID','--value']) for u in ['xr','sb','caddy-sub','argo']}
+dependency_pids=identity()
+dependency=json.loads(subprocess.run(['python3','-B','/opt/argosbx-fleet/current/agent.py','dependency-snapshot'],input=json.dumps({'management_sha256':'0'*64,'probe_acme':False}),text=True,capture_output=True,check=True,timeout=45).stdout)
+assert dependency['read_only'] and dependency['native_matches'] and not dependency['forced_renewal'] and not dependency['services_reloaded']
+assert not dependency['connector']['credential_found'] and 'ci-fixture-only' not in json.dumps(dependency)
+assert identity()==dependency_pids and before=={p:Path(p).read_bytes() for p in before}
+print('PASS installed dependency snapshot, unknown connector evidence and process preservation',flush=True)
 # TLS 1.3 cover server for REALITY and ShadowTLS; never relies on an external website.
 class Handler(http.server.BaseHTTPRequestHandler):
  def do_GET(self):

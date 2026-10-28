@@ -1,5 +1,5 @@
 {
-  "version": "v1.2.16",
+  "version": "v1.2.17",
   "python_min": "3.10",
   "dependencies": [
     "PyYAML"

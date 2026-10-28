@@ -18,8 +18,25 @@ def remote(config,server,command,payload=None,allow_restart=False):
     return json.loads(p.stdout)
 
 def main():
-    p=argparse.ArgumentParser();p.add_argument('command',choices=['inspect','protocol-plan','protocol-apply','protocol-recover','domain-plan','domain-stage','domain-commit','domain-recover','xhttp-stage','xhttp-commit','xhttp-recover','diagnose','certificate-audit','cf-audit']);p.add_argument('--config');p.add_argument('--server',required=True);p.add_argument('--allow-restart',action='store_true');p.add_argument('--observer');checks=p.add_mutually_exclusive_group();checks.add_argument('--verify-writes',action='store_true');checks.add_argument('--recover-writes',action='store_true');a=p.parse_args()
-    config=read(a.config);server=servers(config)[a.server]
+    p=argparse.ArgumentParser();p.add_argument('command',choices=['inspect','protocol-plan','protocol-apply','protocol-recover','domain-plan','domain-stage','domain-commit','domain-recover','xhttp-stage','xhttp-commit','xhttp-recover','diagnose','certificate-audit','cf-audit','dependency-audit']);p.add_argument('--config');p.add_argument('--server',required=True);p.add_argument('--allow-restart',action='store_true');p.add_argument('--observer');p.add_argument('--output');checks=p.add_mutually_exclusive_group();checks.add_argument('--verify-writes',action='store_true');checks.add_argument('--recover-writes',action='store_true');a=p.parse_args()
+    config=read(a.config)
+    if a.command=='dependency-audit':
+        import dependency_audit
+        from fleet import resolve_path
+        if a.allow_restart or a.observer or a.recover_writes:raise ValueError('依赖验收不接受重启、observer 或恢复参数；恢复写测试请用 cf-audit --recover-writes')
+        if a.output:
+            protected={Path(a.config or os.environ.get('ARGOSBX_SERVERS_FILE',DEFAULT)).expanduser().resolve()}
+            protected|={resolve_path(v).resolve() for k,v in config.get('cloudflare',{}).items() if k in ('token_file','policy_snapshot')}
+            protected|={resolve_path(s['ssh'][k]).resolve() for s in config['servers'] for k in ('identity_file','known_hosts') if s['ssh'].get(k)}
+            output=Path(a.output).expanduser()
+            if output.resolve() in protected or output.is_dir() or output.is_symlink():raise ValueError('报告不能覆盖配置、凭据或 SSH 信任文件，也不能写到目录或符号链接')
+        targets=[s for s in config['servers'] if s.get('status','active')=='active' and (a.server=='all' or s['id']==a.server)]
+        if not targets:raise ValueError('没有选中已启用服务器')
+        result=dependency_audit.run(config,targets,remote,a.verify_writes)
+        if a.output:save(Path(a.output).expanduser(),result)
+        print(json.dumps(result,ensure_ascii=False));return 0 if result['passed'] else 2
+    if a.server=='all' or a.output:raise ValueError('--server all 和 --output 仅用于 dependency-audit')
+    server=servers(config)[a.server]
     if a.observer and a.command not in ('diagnose','certificate-audit'):raise ValueError('--observer 只用于独立诊断或证书验收')
     if (a.verify_writes or a.recover_writes) and a.command!='cf-audit':raise ValueError('写权限验证只适用于 cf-audit')
     if a.command in ('diagnose','certificate-audit','cf-audit'):
@@ -183,6 +200,7 @@ def main():
 
 if __name__=='__main__':
     try:
-        with lock(STATE/'fleet.lock'):main()
+        with lock(STATE/'fleet.lock'):code=main()
+        sys.exit(code or 0)
     except Exception as e:
         print(str(e) if isinstance(e,(ValueError,RuntimeError)) else type(e).__name__,file=sys.stderr);sys.exit(1)

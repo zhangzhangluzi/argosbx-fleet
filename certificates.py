@@ -90,11 +90,11 @@ def verify(cases,https_check=None):
     with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:return list(pool.map(check,cases))
 
 
-def run(config,server,remote,observer=None):
+def run(config,server,remote,observer=None,http_hosts=()):
     import acceptance,shlex
     from fleet import servers,ssh_args
     from urllib.parse import urlsplit
-    source=urlsplit(server['subscription']['url']);payload={'http_hosts':[source.hostname]}
+    source=urlsplit(server['subscription']['url']);payload={'http_hosts':list(dict.fromkeys([source.hostname,*http_hosts]))}
     bundle=remote(config,server['id'],'diagnostic-source',payload)
     checks=acceptance.cases(server,bundle['nodes'])
     metadata=bundle['certificates'];selected=[]
@@ -108,7 +108,7 @@ def run(config,server,remote,observer=None):
     for value in metadata['http_certificates']:
         if value.get('status')!='found':return {'server':server['id'],'passed':False,'disk':redact(metadata),'runtime':[],'reason':'subscription_certificate_not_found'}
         for family in ('ipv4','ipv6'):
-            if server.get(family):selected.append({'name':'subscription/'+family,'node':{'type':'tls','server':server[family],'port':source.port or 443,'sni':source.hostname},
+            if server.get(family):selected.append({'name':('subscription' if value['host']==source.hostname else 'https/'+value['host'])+'/'+family,'node':{'type':'tls','server':server[family],'port':source.port or 443,'sni':value['host']},
                                                   'sha256':value['sha256'],'certificate_pem':value['certificate_pem']})
     if not selected:raise ValueError('没有可验收的入站或订阅证书')
     if observer:

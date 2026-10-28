@@ -270,7 +270,7 @@ def certificate_recover():
     journal.unlink();return {'recovered':True}
 
 def main():
-    p=argparse.ArgumentParser();p.add_argument('command',choices=['adopt','inspect','plan','planned','apply','commit','recover','export','certificate','certificate-recover','xhttp-stage','xhttp-candidate','xhttp-commit','xhttp-recover','network-snapshot','certificate-snapshot','diagnostic-source']);p.add_argument('--allow-restart',action='store_true');p.add_argument('--defer-commit',action='store_true');a=p.parse_args()
+    p=argparse.ArgumentParser();p.add_argument('command',choices=['adopt','inspect','plan','planned','apply','commit','recover','export','certificate','certificate-recover','xhttp-stage','xhttp-candidate','xhttp-commit','xhttp-recover','network-snapshot','certificate-snapshot','diagnostic-source','dependency-snapshot']);p.add_argument('--allow-restart',action='store_true');p.add_argument('--defer-commit',action='store_true');a=p.parse_args()
     with lock(HOME/'agent.lock'):
         if a.command.startswith('xhttp-'):
             import xhttp
@@ -287,6 +287,13 @@ def main():
             r['source_matches']=TARGET.exists() and yaml.safe_load(TARGET.read_text())==export(configs(s),s) if r['native_configuration_matches'] else False
             r['certificate_health']=certificate_health(s)
             r['cloudflare_health']=cloudflare_health(s)
+        elif a.command=='dependency-snapshot':
+            import dependency_audit
+            if a.allow_restart or a.defer_commit:raise ValueError('依赖快照只读，不接受重启或提交选项')
+            if list(HOME.glob('*journal.json')):raise ValueError('存在未完成事务，暂不构造依赖验收快照')
+            request=json.loads(sys.stdin.read() or '{}')
+            r=dependency_audit.snapshot(load(),request.get('management_sha256'),request.get('probe_acme',True))
+            r['protected']['source_sha256']=sha(TARGET.read_text()) if TARGET.exists() else None
         elif a.command in ('network-snapshot','certificate-snapshot','diagnostic-source'):
             import diagnostics,certificates
             s=load()

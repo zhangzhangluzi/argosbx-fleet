@@ -211,3 +211,16 @@ python3 fleetctl.py cf-audit --config /private/servers.json --server us --recove
 私有 inventory 增加 `"cloudflare": {"token_file":"/private/cloudflare.token", "management_server":"us"}`，其中 ID 必须对应已启用且有 IPv4 的服务器。`fleetctl` 的审计、DNS／域名迁移、隧道管理和 `onboard` 的域名发现／初始化统一使用该出口。没有配置此字段的旧安装保持原直接请求行为；配置后通道失败会停止，不降级为本机请求。
 控制机使用已有可信 SSH 密钥与 known_hosts 创建独立、短期本地转发，仅监听 `127.0.0.1` 随机端口，不复用可能残留转发的共享 SSH master。CF API 的 A 记录由出口机器解析，控制机到 `api.cloudflare.com` 的 TLS 完整穿过 SSH 通道；服务端不会接收明文管理令牌或保存令牌文件。请求不跟随重定向，不能借此转发到任意其他站点。启动时先访问同通道无认证的 `/cdn-cgi/trace`，源 IPv4 必须与 inventory 中该机器 IPv4 相同，随后才发送令牌。审计的 `management_transport` 和 `source_ip_filter` 分别给出实测出口与白名单匹配结果。
 应先升级并验收该通道，再在 Cloudflare 控制台将现有管理令牌的允许来源收窄至出口 IPv4 的 `/32`。保留原权限和令牌值；刷新绑定策略快照后，从允许出口验证真实资源读写、从另一台独立机器验证资源请求被拒绝。Token Verify 接口不受 IP 过滤约束，不能用它验证拒绝效果。只约束管理令牌，不改变 cloudflared 的独立连接凭据、代理节点或订阅。程序退出时清理自有 SSH 进程；临时转发不对局域网或公网开放。
+
+## v1.2.17：一键依赖验收
+在控制机沿用现有 `ARGOSBX_SERVERS_FILE`、`ARGOSBX_WORKSPACE` 和 SSH 信任配置：
+```sh
+python3 fleetctl.py dependency-audit --server all --output /private/dependency-report.json
+# 完整写权限验收：只使用可恢复、随机命名的 TXT 和无连接器测试隧道
+python3 fleetctl.py dependency-audit --server all --verify-writes --output /private/dependency-report.json
+```
+也可将 `all` 改成单台服务器 ID。默认只读，不创建 CF 资源，不强制签发或续签证书，不加载、重启服务，不发布订阅。使用现有临时原生客户端验证 TLS／CF 业务，结束后清理；不建立 TUN 或更改当前 VPN。成功退出 0，检查未通过退出 2，参数或启动错误退出 1。报告原子写入为 0600，禁止覆盖输入配置、令牌、策略快照和 SSH 信任文件。
+逐台读取 Caddy 的实际进程配置及环境，只输出必要的依赖事实：ACME 验证方式、CA 目录连通性、服务用户对证书存储的写权限、证书文件引用与热加载、其他活动续期任务，以及连接器凭据与管理令牌是否独立。只向 VPS 发送管理令牌的 SHA256 用于内存比较，不发送令牌值，不回传连接器凭据或 DNS provider 密钥。DNS-01、外部续期任务、静态证书或不能确认的存储均提示单独核验，不会冒充 HTTP-01 已通过。
+复用证书审计，覆盖协议端口、源订阅和 Caddy 的所有托管域名；独立服务器核对当前证书完整指纹，并检查 HTTP-01 的 TCP 80／Host 可达性。HTTP 404 只代表到达 Caddy，不代表完成 ACME 授权；报告明确 `real_acme_validation=false`、`forced_renewal=false`。台湾／日本的探测端优先互相选择，避免仅因美国验收端离线就声称另外两台续期损坏。
+CF 请求必须经过 inventory 的管理出口；检查同通道实测源 IPv4及各已登记非管理 IPv4来源的 `/zones` 拒绝结果。逐台校验直连 DNS、证书域名源站、固定隧道路由、隧道健康与 CF／XHTTP 的 HTTPS、出口和 UDP 业务。策略快照过期或缺少 Token Details 权限仍保留为 `not_verified/partial`；功能验收范围是实际读写与来源允许／拒绝，不宣称已完整枚举令牌权限或所有白名单地址。默认 `write_access.status=not_tested`；显式写验收按 zone/account 去重并复用原有恢复日志，失败后按报告中的 `cf-audit --server <ID> --recover-writes` 恢复。
+验收前后对比代理／Caddy／连接器 PID、重启计数、原生配置、Caddy 完整适配配置及源订阅哈希，发现漂移即停止通过。美国管理通道故障仅说明 CF API 维护不可用；HTTP-01 和独立连接器凭据的独立性必须由各自检查证明。不会因管理检查失败而自动更换出口、扩大白名单或重启服务。

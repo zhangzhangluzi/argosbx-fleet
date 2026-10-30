@@ -1,32 +1,32 @@
 {
   "xray": {
     "amd64": {
-      "url": "https://github.com/XTLS/Xray-core/releases/download/v26.3.27/Xray-linux-64.zip",
-      "sha256": "23cd9af937744d97776ee35ecad4972cf4b2109d1e0fe6be9930467608f7c8ae"
+      "url": "https://github.com/XTLS/Xray-core/releases/download/v26.10.29/Xray-linux-64.zip",
+      "sha256": "8a5f3e6a1057e4bd0f8a7c57c9d91204b4be0b74222a6e210d070603101163c2"
     },
     "arm64": {
-      "url": "https://github.com/XTLS/Xray-core/releases/download/v26.3.27/Xray-linux-arm64-v8a.zip",
-      "sha256": "4d30283ae614e3057f730f67cd088a42be6fdf91f8639d82cb69e48cde80413c"
+      "url": "https://github.com/XTLS/Xray-core/releases/download/v26.10.29/Xray-linux-arm64-v8a.zip",
+      "sha256": "afe01f19045b05237420328028ee1ee2e1edd2100eb41a8cbbf50e683b0a6e58"
     }
   },
   "sing-box": {
     "amd64": {
-      "url": "https://github.com/SagerNet/sing-box/releases/download/v1.14.3/sing-box-1.14.3-linux-amd64.tar.gz",
-      "sha256": "e2bdf179c15a3652955dc44867e33ca0965c9c9b91b34267dcc5a5d639a5feee"
+      "url": "https://github.com/SagerNet/sing-box/releases/download/v1.14.4/sing-box-1.14.4-linux-amd64.tar.gz",
+      "sha256": "699a1b510aa4396b2176d32d1181920399ebf1e267835da6f3b598d0f7c24968"
     },
     "arm64": {
-      "url": "https://github.com/SagerNet/sing-box/releases/download/v1.14.3/sing-box-1.14.3-linux-arm64.tar.gz",
-      "sha256": "29dae24d76bea3bc62d07dd3e60cfc12003de7debbd6b768df9be9c68360174e"
+      "url": "https://github.com/SagerNet/sing-box/releases/download/v1.14.4/sing-box-1.14.4-linux-arm64.tar.gz",
+      "sha256": "436441f76ee2f7fe21b5b2d426d3cb261a480455a704865789ad533e4273ec26"
     }
   },
   "cloudflared": {
     "amd64": {
-      "url": "https://github.com/cloudflare/cloudflared/releases/download/2026.10.1/cloudflared-linux-amd64",
-      "sha256": "3bfc539f45d2620c71debb7a86be0efa737ed5ccbad9eb85c787116900e5c586"
+      "url": "https://github.com/cloudflare/cloudflared/releases/download/2026.10.6/cloudflared-linux-amd64",
+      "sha256": "1d356dac769d0dbf62ebe588c4034824bbff98d5790c2f844cc99e0e2f57462d"
     },
     "arm64": {
-      "url": "https://github.com/cloudflare/cloudflared/releases/download/2026.10.1/cloudflared-linux-arm64",
-      "sha256": "2c65dfabf616c40efc7545d107d7a57ad5e21377e2964b7e88af19a238074a46"
+      "url": "https://github.com/cloudflare/cloudflared/releases/download/2026.10.6/cloudflared-linux-arm64",
+      "sha256": "0ae0e179475b2c77651a718d2b376e0151f4fca5954702a84f02843a4d5fcac0"
     }
   },
   "caddy": {

@@ -242,7 +242,11 @@ def observer_config(config,server):
 
 def _checked(action):
     try:return action()
-    except Exception as error:return {'passed':False,'error':error_info(error)}
+    except Exception as error:
+        from acceptance import AcceptanceError
+        result={'passed':False,'error':error_info(error)}
+        if isinstance(error,AcceptanceError):result['evidence']=error.evidence
+        return result
 
 
 def read_remote(remote,config,server,command,payload=None):

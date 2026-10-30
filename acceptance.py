@@ -4,6 +4,13 @@ from pathlib import Path
 from fleet import ssh_args
 from protocols import classify,protocol_type,families
 
+class AcceptanceError(RuntimeError):
+    """Only schema-selected results are safe to include in an audit report."""
+    def __init__(self,message,observer,rows=()):
+        super().__init__(message)
+        allowed=('https_ok','exit_ok','udp_ok','first_attempt_ok','retry_recovered','passed','attempt_count')
+        self.evidence={'observer':observer,'results':[{**{'name':r.get('name')},**{k:r[k] for k in allowed if type(r.get(k)) in (bool,int)}} for r in rows]}
+
 def cases(server,nodes):
     templates={}
     for n in nodes:
@@ -43,11 +50,11 @@ def verify_new_server(config,server,nodes):
     for peer,checks in groups.items():
         payload={'code':source,'cases':checks}
         proc=subprocess.run(ssh_args(peer,config)+[shlex.join(['python3','-c',wrapper])],input=json.dumps(payload),text=True,capture_output=True,timeout=max(180,len(checks)*60))
-        if proc.returncode:raise RuntimeError('独立客户端验收未完成；保持 pending，不发布节点')
+        if proc.returncode:raise AcceptanceError('独立客户端验收未完成；保持 pending，不发布节点',peer)
         result=json.loads(proc.stdout);values=result.get('results',[])
         if sorted(r['name'] for r in values)!=sorted(c['name'] for c in checks):raise ValueError('验收结果节点集合不符')
         failed=[r['name'] for r in values if not all(r.get(k) is True for k in ('https_ok','exit_ok','udp_ok'))]
-        if result.get('passed') is not True or failed:raise RuntimeError('新机节点验收失败：'+','.join(failed)+'；保持 pending，不发布节点')
+        if result.get('passed') is not True or failed:raise AcceptanceError('新机节点验收失败：'+','.join(failed)+'；保持 pending，不发布节点',peer,values)
         results.extend({**r,'observer':peer} for r in values)
     return {'passed':True,'first_attempt_passed':all(r.get('first_attempt_ok') is True for r in results),
             'retry_recovered':sum(r.get('retry_recovered') is True for r in results),'results':results}

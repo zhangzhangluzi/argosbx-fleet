@@ -41,15 +41,17 @@ class InboundLifecycleTests(unittest.TestCase):
         with self.assertRaises(ValueError):reconcile(c,s,d)
 
 class TunnelAPI(FakeCF):
-    def __init__(self):super().__init__();self.tunnels=[];self.unknown_create=False
+    def __init__(self):super().__init__();self.tunnels=[];self.unknown_create=False;self.connector_rows=[]
     def call(self,path,body=None,method=None):
         if path.endswith('/token'):return {'result':'fixture-connector-token'}
+        if path.endswith('/connections'):return {'result':self.connector_rows}
         if '/cfd_tunnel' in path and '/configurations' not in path:
             if method=='POST':
-                self.tunnels.append({'id':'00000000-0000-0000-0000-000000000001','name':body['name']})
+                self.tunnels.append({'id':'00000000-0000-0000-0000-000000000001','name':body['name'],'status':'inactive'})
                 if self.unknown_create:self.unknown_create=False;raise TimeoutError()
                 return {'result':self.tunnels[-1]}
             if method=='DELETE':self.tunnels=[];return {'result':{}}
+            if self.tunnels and path.endswith('/'+self.tunnels[0]['id']):return {'result':self.tunnels[0]}
             return {'result':self.tunnels}
         return super().call(path,body,method)
 
@@ -77,6 +79,11 @@ class TunnelTests(unittest.TestCase):
     def test_changed_inventory_cannot_resume(self):
         tunnels.provision(self.cf,self.server,'example.com',self.path);self.server['ipv4']='192.0.2.2'
         with self.assertRaises(ValueError):tunnels.provision(self.cf,self.server,'example.com',self.path)
+
+    def test_connected_owned_tunnel_preserves_dns_and_recovery_journal(self):
+        tunnels.provision(self.cf,self.server,'example.com',self.path);before=copy.deepcopy(self.cf.records);self.cf.connector_rows=[{'id':'live'}]
+        with self.assertRaises(ValueError):tunnels.remove_owned(self.cf,self.path)
+        self.assertEqual(self.cf.records,before);self.assertTrue(self.path.exists());self.assertTrue(self.cf.tunnels)
 
 class CreatedSourceRecoveryTests(unittest.TestCase):
     def test_created_source_removed_after_unknown_post(self):

@@ -224,3 +224,8 @@ python3 fleetctl.py dependency-audit --server all --verify-writes --output /priv
 复用证书审计，覆盖协议端口、源订阅和 Caddy 的所有托管域名；独立服务器核对当前证书完整指纹，并检查 HTTP-01 的 TCP 80／Host 可达性。HTTP 404 只代表到达 Caddy，不代表完成 ACME 授权；报告明确 `real_acme_validation=false`、`forced_renewal=false`。台湾／日本的探测端优先互相选择，避免仅因美国验收端离线就声称另外两台续期损坏。
 CF 请求必须经过 inventory 的管理出口；检查同通道实测源 IPv4及各已登记非管理 IPv4来源的 `/zones` 拒绝结果。逐台校验直连 DNS、证书域名源站、固定隧道路由、隧道健康与 CF／XHTTP 的 HTTPS、出口和 UDP 业务。策略快照过期或缺少 Token Details 权限仍保留为 `not_verified/partial`；功能验收范围是实际读写与来源允许／拒绝，不宣称已完整枚举令牌权限或所有白名单地址。默认 `write_access.status=not_tested`；显式写验收按 zone/account 去重并复用原有恢复日志，失败后按报告中的 `cf-audit --server <ID> --recover-writes` 恢复。
 验收前后对比代理／Caddy／连接器 PID、重启计数、原生配置、Caddy 完整适配配置及源订阅哈希，发现漂移即停止通过。美国管理通道故障仅说明 CF API 维护不可用；HTTP-01 和独立连接器凭据的独立性必须由各自检查证明。不会因管理检查失败而自动更换出口、扩大白名单或重启服务。
+
+## v1.2.19：上游兼容与初始化版本
+隧道清理使用独立 `/connections` 接口，不再依赖详情中的旧字段。未知状态、读取失败或仍有连接器时停止清理，保留恢复日志；初始化回撤会先检查活动连接，再恢复 DNS。业务验收失败报告包含探测端、节点名和有限的布尔／计数字段，不保存原始 stderr 或认证信息。
+空白机初始化的 Xray／sing-box／cloudflared 分别固定为 26.10.29／1.14.4／2026.10.6；Caddy 保持 2.11.7。发布清单保存两种架构上游归档的 SHA256，续装缓存同时验证来源 URL、归档摘要、架构和落盘二进制摘要；旧式仅包含本机摘要的标记不能证明与当前发布清单一致。此检查只发生在显式空白机或未完成的初始化流程中，不作用于已经完成安装的运行服务。
+普通维护升级继续不更新运行二进制。已有部署需要另行安排受控重连窗口，依次升级并验证代理内核与连接器。cloudflared 2026.10.2 起包含 [eMudhra 证书信任修复](https://blog.cloudflare.com/emudhra-certificate-compromise)，本项目固定到更新稳定版；系统 CA 包已更新不代表各语言运行时或现存进程已采用新信任库。

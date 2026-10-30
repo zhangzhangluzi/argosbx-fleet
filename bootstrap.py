@@ -51,9 +51,13 @@ def binaries():
     NATIVE.mkdir(parents=True,exist_ok=True,mode=0o700)
     for name,builds in manifest.items():
         item=builds[arch];target=NATIVE/name if name in ('xray','sing-box') else Path('/usr/local/bin')/name
-        # A completed phase never downloads twice; retries reuse an existing verified digest.
+        # Resume only when both the manifest pin and installed bytes are verified.
         marker=target.with_suffix('.sha256')
-        if target.exists() and marker.exists() and marker.read_text()==hashlib.sha256(target.read_bytes()).hexdigest():continue
+        provenance={'url':item['url'],'archive_sha256':item['sha256'],'architecture':arch}
+        if target.exists() and marker.exists():
+            try:cached=json.loads(marker.read_text())
+            except (OSError,ValueError):cached=None
+            if cached=={**provenance,'binary_sha256':hashlib.sha256(target.read_bytes()).hexdigest()}:continue
         with tempfile.TemporaryDirectory(prefix='fleet-download-') as d:
             archive=Path(d)/'archive'
             urllib.request.urlretrieve(item['url'],archive)
@@ -66,7 +70,7 @@ def binaries():
                     if len(members)!=1:raise ValueError('发布包缺少唯一二进制')
                     data=t.extractfile(members[0]).read()
             else:data=archive.read_bytes()
-            atomic(target,data,0o755);atomic(marker,hashlib.sha256(data).hexdigest())
+            atomic(target,data,0o755);save(marker,{**provenance,'binary_sha256':hashlib.sha256(data).hexdigest()})
 
 def unit(name,command,user='root',extra=''):
     body='[Unit]\nAfter=network-online.target\nWants=network-online.target\n[Service]\nType=simple\nUser='+user+'\nGroup='+user+'\nExecStart='+command+'\nRestart=on-failure\nRestartSec=3\nLimitNOFILE=65536\n'+extra+'\n[Install]\nWantedBy=multi-user.target\n'

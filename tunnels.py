@@ -5,6 +5,15 @@ from storage import save
 from protocols import protocol_type,cf_origin,validate_settings
 from domains import build,stage,recover
 
+def assert_disconnected(cf,endpoint,detail):
+    """The legacy detail.connections field is no longer authoritative."""
+    if not isinstance(detail,dict) or detail.get('status') not in ('inactive','down'):
+        raise ValueError('隧道未确认停止，保留日志与 DNS，拒绝删除')
+    clients=cf.call(endpoint+'/connections').get('result')
+    if not isinstance(clients,list) or clients:
+        raise ValueError('隧道仍有连接器或连接状态未知，保留日志并拒绝删除')
+    return {'checked':True,'connectors':0}
+
 def discover(cf,zone):
     found=[z for z in cf.zones() if z['name']==zone and z.get('status')=='active']
     if len(found)!=1:raise ValueError('Token 无权读取所选已激活域名')
@@ -71,11 +80,17 @@ def provision(cf,server,zone,journal):
 def remove_owned(cf,journal):
     """Only use after the new connector is stopped; existing tunnels are never accepted."""
     if not journal.exists():return
-    j=json.loads(journal.read_text());recover(cf,journal.with_suffix('.dns.json'))
+    j=json.loads(journal.read_text())
     base='/accounts/'+j['account']+'/cfd_tunnel'
     matches=[t for t in cf.call(base+'?'+urlencode({'name':j['name'],'is_deleted':'false'}))['result'] if t['name']==j['name']]
     for t in matches:
         if j['tunnel_id'] and t['id']!=j['tunnel_id']:raise ValueError('隧道身份变化，拒绝删除')
+        detail=cf.call(base+'/'+t['id'])['result']
+        if detail.get('name')!=j['name']:raise ValueError('隧道身份变化，拒绝删除')
+        assert_disconnected(cf,base+'/'+t['id'],detail)
+    recover(cf,journal.with_suffix('.dns.json'))
+    for t in matches:
+        assert_disconnected(cf,base+'/'+t['id'],cf.call(base+'/'+t['id'])['result'])
         cf.call(base+'/'+t['id'],method='DELETE')
     journal.unlink()
 

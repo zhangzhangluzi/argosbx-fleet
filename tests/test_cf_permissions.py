@@ -65,7 +65,7 @@ class SnapshotTests(unittest.TestCase):
 
 class WriteCF:
     token='fixture-secret-only'
-    def __init__(self,lose=None):self.dns={};self.tunnels={};self.calls=[];self.lose=lose;self.delete_block=False
+    def __init__(self,lose=None):self.dns={};self.tunnels={};self.calls=[];self.lose=lose;self.delete_block=False;self.connector_rows=[]
     def zones(self):return FakeCF().zones()
     def call(self,path,body=None,method=None):
         method=method or 'GET';self.calls.append((method,path));parts=urlsplit(path);query=parse_qs(parts.query)
@@ -84,9 +84,10 @@ class WriteCF:
         if '/cfd_tunnel' in parts.path:
             tail=parts.path.split('/cfd_tunnel',1)[1].lstrip('/')
             if method=='POST':
-                self.tunnels['t1']={'id':'t1',**body,'connections':[]}
+                self.tunnels['t1']={'id':'t1',**body,'status':'inactive'}
                 if self.lose=='tunnel-create':raise TimeoutError()
                 return {'result':self.tunnels['t1']}
+            if tail.endswith('/connections'):return {'result':self.connector_rows}
             if tail.endswith('/configurations'):
                 if method=='PUT':
                     if self.lose=='tunnel-config-denied':raise domains.CloudflareAPIError(403,[10000])
@@ -142,6 +143,26 @@ class WriteTests(unittest.TestCase):
     def test_unfinished_probe_blocks_a_second_allocation(self):
         save(self.journal,{'intent':'pending'})
         with self.assertRaises(ValueError):cf_probe.verify(WriteCF(),fixtures.CloudflareAuditTests.server,self.journal)
+
+    def test_retired_detail_field_cannot_hide_an_active_connector(self):
+        cf=WriteCF();cf.connector_rows=[{'id':'unexpected-connector','conns':[{'id':'live'}]}]
+        with self.assertRaises(ValueError):cf_probe.verify(cf,fixtures.CloudflareAuditTests.server,self.journal)
+        self.assertTrue(self.journal.exists());self.assertTrue(cf.tunnels);self.assertTrue(cf.dns)
+        self.assertFalse(any(method=='DELETE' for method,_ in cf.calls))
+        cf.connector_rows=[];self.assertTrue(cf_probe.recover(cf,self.journal)['cleaned'])
+
+    def test_unknown_connections_response_or_read_denial_never_allows_delete(self):
+        for response in [None,{},'invalid']:
+            cf=WriteCF();cf.connector_rows=response
+            with self.subTest(response=response),self.assertRaises(ValueError):cf_probe.verify(cf,fixtures.CloudflareAuditTests.server,self.journal)
+            self.assertTrue(self.journal.exists());self.assertFalse(any(method=='DELETE' for method,_ in cf.calls))
+            cf.connector_rows=[];cf_probe.recover(cf,self.journal)
+        cf=WriteCF();original=cf.call
+        def denied(path,*args,**kwargs):
+            if path.endswith('/connections'):raise domains.CloudflareAPIError(403,[10000])
+            return original(path,*args,**kwargs)
+        with patch.object(cf,'call',side_effect=denied),self.assertRaises(domains.CloudflareAPIError):cf_probe.verify(cf,fixtures.CloudflareAuditTests.server,self.journal)
+        self.assertTrue(self.journal.exists());self.assertFalse(any(method=='DELETE' for method,_ in cf.calls))
 
     def test_used_or_reconfigured_test_tunnel_is_not_deleted(self):
         cf=WriteCF()

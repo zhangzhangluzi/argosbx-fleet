@@ -79,6 +79,12 @@ class NativeFactsTests(unittest.TestCase):
             row=audit.http_checks([{'name':'x','ip':'192.0.2.1','host':'example.com'}])[0]
         self.assertFalse(row['passed']);self.assertNotIn('PRIVATE',json.dumps(row))
 
+    def test_failed_business_check_retains_node_and_observer_without_credentials(self):
+        def failure():
+            raise acceptance.AcceptanceError('PRIVATE freeform error','jp',[{'name':'cf/cf','https_ok':False,'udp_ok':False,'passed':False,'password':'PRIVATE','stderr':'PRIVATE'}])
+        result=audit._checked(failure);self.assertFalse(result['passed']);self.assertEqual(result['evidence']['observer'],'jp')
+        self.assertEqual(result['evidence']['results'][0]['name'],'cf/cf');self.assertNotIn('PRIVATE',json.dumps(result))
+
     def test_real_snapshot_uses_process_config_and_never_returns_provider_secrets(self):
         with tempfile.TemporaryDirectory() as d:
             root=pathlib.Path(d);proc=root/'proc';(proc/'10').mkdir(parents=True);(proc/'20').mkdir()

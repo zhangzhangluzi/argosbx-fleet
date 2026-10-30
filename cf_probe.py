@@ -36,13 +36,15 @@ def recover(cf,journal):
             for row in rows:
                 if row.get('name')!='argosbx-permission-check-'+nonce:continue
                 detail=cf.call(base+'/'+row['id'])['result']
-                if detail.get('name')!=row['name'] or detail.get('connections'):raise ValueError('测试隧道已被使用，保留日志并停止清理')
+                if detail.get('name')!=row['name']:raise ValueError('测试隧道身份变化，保留日志并停止清理')
                 if item.get('configuration_attempted'):
                     try:config=cf.call(base+'/'+row['id']+'/configurations')['result']['config']
                     except CloudflareAPIError as error:
                         if error.status!=404:raise
                         config=None
                     if config is not None and config.get('ingress')!=[{'service':'http_status:404'}]:raise ValueError('测试隧道配置已变化，保留日志并停止清理')
+                from tunnels import assert_disconnected
+                assert_disconnected(cf,base+'/'+row['id'],detail)
                 cf.call(base+'/'+row['id'],method='DELETE');count+=1
             remaining=cf.call(base+'?'+urlencode({'name':'argosbx-permission-check-'+nonce,'is_deleted':'false'}))['result']
             if any(r.get('name')=='argosbx-permission-check-'+nonce for r in remaining):raise ValueError('测试隧道删除未确认，保留日志')

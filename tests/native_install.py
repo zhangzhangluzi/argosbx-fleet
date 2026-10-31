@@ -1,4 +1,4 @@
-"""CI-only blank-host/systemd + six protocol end-to-end acceptance; no production credentials."""
+"""CI-only blank-host/systemd + native protocol acceptance; no production credentials."""
 import copy,json,os,sys,subprocess,tempfile,threading,time,ssl,http.server,hashlib
 from pathlib import Path
 from unittest.mock import patch
@@ -77,7 +77,7 @@ for node in nodes:
  out={'type':node['type'],'tag':'proxy','server':'127.0.0.1','server_port':p['port']};extras=[]
  tls={'enabled':True,'server_name':p.get('sni','ci.example.com'),'certificate_path':server['certificates']['domain']['certificate_file']}
  if ident=='reality':out.update(uuid=node['uuid'],flow=node['flow'],tls={'enabled':True,'server_name':p['sni'],'utls':{'enabled':True,'fingerprint':'chrome'},'reality':{'enabled':True,'public_key':node['reality-opts']['public-key'],'short_id':node['reality-opts']['short-id']}})
- elif ident=='cf':out.update(uuid=node['uuid'],security='auto',transport={'type':'ws','path':p['ws_path']})
+ elif ident=='cf':out.update(uuid=node['uuid'],security=node.get('cipher','auto'),transport={'type':'ws','path':'/'+p['ws_path'].lstrip('/')})
  elif ident in ('hy2','salamander'):out.update(type='hysteria2',password=node['password'],tls=tls)
  elif ident=='anytls':out.update(password=node['password'],tls=tls)
  else:
@@ -130,6 +130,41 @@ for n in nodes:
  result=probe.check_case({'name':ident,'node':n,'expected_ips':['127.0.0.1']},https_check=checked(probe_https),udp_check=checked(probe_udp))
  assert all(result[k] for k in ('https_ok','exit_ok','udp_ok')),result
  print('PASS onboarding HTTPS/UDP probe',ident,flush=True)
+# Emulate CF's TLS termination while using the exact installed WS backend.
+# TLS + auto makes sing-box send VMess zero; a plaintext-only fixture misses it.
+import socketserver
+class TLSRelay(socketserver.BaseRequestHandler):
+ def handle(self):
+  def copy_stream(source,target):
+   try:
+    while True:
+     data=source.recv(65536)
+     if not data:break
+     target.sendall(data)
+   except OSError:pass
+   finally:
+    try:target.shutdown(socket.SHUT_WR)
+    except OSError:pass
+  try:
+   with self.server.context.wrap_socket(self.request,server_side=True) as client,socket.create_connection(('127.0.0.1',server['protocols']['cf']['port']),10) as upstream:
+    threading.Thread(target=copy_stream,args=(client,upstream),daemon=True).start()
+    copy_stream(upstream,client)
+  except OSError:pass
+class RelayServer(socketserver.ThreadingTCPServer):
+ allow_reuse_address=True
+ daemon_threads=True
+relay=RelayServer(('127.0.0.1',25893),TLSRelay)
+relay.context=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+relay.context.load_cert_chain(server['certificates']['domain']['certificate_file'],server['certificates']['domain']['key_file'])
+threading.Thread(target=relay.serve_forever,daemon=True).start()
+try:
+ cf_node=next(n for n in nodes if n['type']=='vmess')
+ for cipher in ['auto','zero','aes-128-gcm','chacha20-poly1305']:
+  n=copy.deepcopy(cf_node);n.update(server='127.0.0.1',port=25893,tls=True,servername='ci.example.com',cipher=cipher,_certificate_path=server['certificates']['domain']['certificate_file']);n.pop('ech-opts',None)
+  result=probe.check_case({'name':'cf-tls-'+cipher,'node':n,'expected_ips':['127.0.0.1']},https_check=checked(probe_https),udp_check=checked(probe_udp))
+  assert result['passed'] and result['first_attempt_ok'],result
+  print('PASS native CF TLS/WS HTTPS/UDP with cipher',cipher,flush=True)
+finally:relay.shutdown();relay.server_close()
 # Same-key renewal must not pass when a listener still serves the old leaf.
 import certificates,diagnostics
 cert_path=Path(server['certificates']['domain']['certificate_file'])

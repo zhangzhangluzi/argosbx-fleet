@@ -235,3 +235,8 @@ Xray 26.10.29 尚未通过现有 sing-box REALITY 客户端的隔离业务验收
 新机使用 sing-box 承接现有 VLESS REALITY Vision，Xray 26.10.29 继续处理 HY2、CF WebSocket 和 XHTTP；没有新增客户端协议。旧版 Xray REALITY 配置仍可读取、编辑及导出。`reality_compat.migrate` 仅生成迁移候选，不写文件或操作服务；迁移沿用原用户、私钥、short ID、SNI、端口与节点模板，并在返回前比较全部导出节点。独立 SNI、出站或安全策略不能映射时拒绝自动迁移。实际变更应在允许重连的维护窗口内事务执行、独立验收后清理旧引擎。
 迁移将嗅探转换为仅作用于该入站的原生 sniff 动作，保留 IPv4 优先、IPv6 回退的本地解析出站；遵循 sing-box 的客户端目标与路由语义。新机沿用最小默认路由。新版 Freedom 的私有地址保护保留，只允许 UDP 127.0.0.53:53，避免本机 DNS 诊断被默认黑洞策略阻断；不会放开其他回环服务或整个私有网段。
 Sub-Store 在双地址源站出现首次连接超时时，可用原生 Node 选项 `--network-family-autoselection-attempt-timeout=2000` 为首个地址保留重传窗口，同时继续允许地址族回退。将它合并进该服务的 `NODE_OPTIONS` 后需单独重启 Sub-Store；不关闭 TLS 校验、不固定节点 IPv4，不改变订阅 URL。实际验收应强制重拉每个源并检查节点、策略、规则和原订阅内容；一次复测成功不能代表长期零超时。
+
+## v1.2.22：保持 CF WebSocket 客户端兼容
+新机的 CF VMess WebSocket 与 REALITY 均由现有 sing-box 承接；Xray 继续处理普通 HY2 和 XHTTP。现有 Xray WebSocket 入站仍可读取、修改和导出。`vmess_compat.migrate` 生成保留 UUID、端口、路径和全部导出节点的纯迁移候选，可与 `reality_compat.migrate` 组合；遇到自定义路由、安全设置或旧式非零 alterId 时拒绝自动转换。
+sing-box 客户端在 TLS 下会把 VMess `auto` 转为 `zero`，而 Xray 26.10.29 移除了该模式的接收支持。仅测试不带 TLS 的回环 WebSocket 无法发现这个差异。后端兼容方案保留已经导入的客户端参数，不依赖先刷新订阅或关闭 TLS 验证。CI 用独立 TLS 转发夹具覆盖 auto、zero、AES-GCM、ChaCha20-Poly1305 的真实 HTTPS／UDP；生产验收还需通过原 Cloudflare 入口及独立服务器检查出口。
+新机固定隧道版本为 cloudflared 2026.10.7；现有隧道需单独分批更新，保持协议、连接凭据、路由和原订阅地址。普通维护工具安装不执行迁移或重启。

@@ -6,7 +6,7 @@ ROOT=Path(__file__).resolve().parent
 FILES=['stash-compat.js','xhttp.py','routing_policy.py','ech.py','country_routes.py','probe.py','acceptance.py','listeners.py','inbounds.py','bootstrap.py','onboard.py','tunnels.py','binaries.json','lease.py','agent.py','domains.py','dns_policy.py','fleet.py','fleetctl.py','generate.py','publication.py','protocols.py','servers.py','storage.py','release.py','install.py','README.md','LICENSE','versions.json','ech-policy.js','region-processor.js','flclash-response-transformer.js']
 
 FILES += ['udp_buffers.py','diagnostics.py','certificates.py','cf_audit.py','cf_probe.py','cf_transport.py','dependency_audit.py']
-FILES += ['reality_compat.py']
+FILES += ['reality_compat.py','vmess_compat.py']
 
 def package(destination):
     manifest=json.loads((ROOT/'versions.json').read_text());files=FILES+[str(p.relative_to(ROOT)) for p in sorted((ROOT/'templates').glob('*'))]

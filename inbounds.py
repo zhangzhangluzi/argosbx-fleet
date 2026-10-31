@@ -6,7 +6,7 @@ import subprocess
 import uuid
 from protocols import protocol_type,validate_settings,LABELS,XHTTP_REUSE
 
-CORES={'reality':'sing-box','hy2':'xray','cf':'xray','anytls':'sing-box','shadowtls':'sing-box','salamander':'sing-box','xhttp':'xray'}
+CORES={'reality':'sing-box','hy2':'xray','cf':'sing-box','anytls':'sing-box','shadowtls':'sing-box','salamander':'sing-box','xhttp':'xray'}
 
 def vless_encryption():
     import re
@@ -52,7 +52,7 @@ def create(ident,p,certificates,keygen=x25519):
         native.update(protocol='hysteria',settings={'version':2,'clients':[{'auth':password}]},streamSettings={'network':'hysteria','security':'tls','tlsSettings':{'alpn':p['alpn'],'certificates':[{'certificateFile':pair['certificate_file'],'keyFile':pair['key_file']}]}})
         node.update(type='hysteria2',password=password,sni=p['sni'],alpn=p['alpn'],**{'skip-cert-verify':False})
     elif kind=='cf':
-        native.update(protocol='vmess',settings={'clients':[{'id':uid}]},streamSettings={'network':'ws','security':'none','wsSettings':{'path':p['ws_path']}})
+        native.update(type='vmess',users=[{'uuid':uid}],transport={'type':'ws','path':'/'+p['ws_path'].lstrip('/')})
         node.update(type='vmess',uuid=uid,server=p['sni'],servername=p['sni'],port=443,tls=True,network='ws',alterId=0,cipher='auto',**{'ws-opts':{'path':p['ws_path'],'headers':{'Host':p['sni']}},'skip-cert-verify':False})
     elif kind=='xhttp':
         private,public=vless_encryption()
@@ -87,7 +87,7 @@ def reconcile(configs,state,desired,keygen=x25519):
         old=next((x for x in result[b['path']]['inbounds'] if x.get('tag')==b['tag']),b['inbound'])
         if protocol_type(ident,state['protocols'][ident])=='shadowtls':tags.add(old['detour'])
         result[b['path']]['inbounds']=[x for x in result[b['path']]['inbounds'] if x.get('tag') not in tags]
-        if protocol_type(ident,state['protocols'][ident])=='reality' and b['core']=='sing-box':
+        if protocol_type(ident,state['protocols'][ident]) in ('reality','cf') and b['core']=='sing-box':
             from reality_compat import cleanup_routes
             cleanup_routes(result[b['path']],b['tag'])
         for key in ('bindings','templates','protocols'):updated[key].pop(ident,None)

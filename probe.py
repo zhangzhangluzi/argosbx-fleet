@@ -10,7 +10,7 @@ def outbound(n):
     if n['type']=='vless':
         out.update(uuid=n['uuid'],flow=n['flow'],packet_encoding='xudp',tls={**tls,'utls':{'enabled':True,'fingerprint':'chrome'},'reality':{'enabled':True,'public_key':n['reality-opts']['public-key'],'short_id':str(n['reality-opts']['short-id'])}})
     elif n['type']=='vmess':
-        out.update(uuid=n['uuid'],security='auto',packet_encoding='xudp',transport={'type':'ws','path':'/'+n['ws-opts']['path'].lstrip('/'),'headers':n['ws-opts'].get('headers',{})})
+        out.update(uuid=n['uuid'],security=n.get('cipher','auto'),packet_encoding='xudp',transport={'type':'ws','path':'/'+n['ws-opts']['path'].lstrip('/'),'headers':n['ws-opts'].get('headers',{})})
         if n.get('tls'):out['tls']=tls
     elif n['type'] in ('anytls','hysteria2'):
         out.update(password=n['password'],tls=tls)

@@ -157,7 +157,11 @@ def adopt(configs,clients,services):
                 r=n['streamSettings']['realitySettings'];host,port=r.get('target',r.get('dest')).rsplit(':',1)
                 p.update(sni=r['serverNames'][0],cover_host=host,cover_port=int(port))
         if ident=='shadowtls':p.update(cover_host=n['handshake']['server'],cover_port=n['handshake']['server_port'])
-        if ident=='cf':p.update(sni=templates[ident]['servername'],ws_path=n['streamSettings']['wsSettings']['path'])
+        if ident=='cf':
+            path=n['transport']['path'] if b['core']=='sing-box' else n['streamSettings']['wsSettings']['path']
+            original=templates[ident]['ws-opts']['path']
+            if '/'+path.lstrip('/')!='/'+original.lstrip('/'):raise ValueError('CF WebSocket 路径与客户端不一致')
+            p.update(sni=templates[ident]['servername'],ws_path=original)
         if ident=='xhttp':p.update(sni=templates[ident]['servername'],path=n['streamSettings']['xhttpSettings']['path'],mode=n['streamSettings']['xhttpSettings']['mode'])
         if ident=='anytls':p['padding_scheme']=n.get('padding_scheme',[])
         p['client']={k:v for k,v in templates[ident].items() if k in CLIENT_BY_TYPE[ident]}
@@ -208,7 +212,9 @@ def render(configs,state,desired):
             else:
                 r=n['streamSettings']['realitySettings'];r['serverNames']=[p['sni']];r['target']=p['cover_host']+':'+str(p['cover_port']);r.pop('dest',None)
         if kind=='shadowtls':n['handshake'].update(server=p['cover_host'],server_port=p['cover_port'])
-        if kind=='cf':n['streamSettings']['wsSettings']['path']=p['ws_path']
+        if kind=='cf':
+            if b['core']=='sing-box':n['transport']['path']='/'+p['ws_path'].lstrip('/')
+            else:n['streamSettings']['wsSettings']['path']=p['ws_path']
         if kind=='xhttp':n['streamSettings']['xhttpSettings'].update(path=p['path'],mode=p['mode'])
         if kind=='anytls':n['padding_scheme']=p['padding_scheme']
     # Include auxiliary/unmanaged inbounds (for example ShadowTLS's inner SS)
@@ -250,7 +256,8 @@ def export(configs,state):
             inner=entry(configs[b['path']],{'tag':n['detour']});node.update(password=inner['password'],cipher=inner['method'])
             node['plugin-opts'].update(host=p['cover_host'],password=n['users'][0]['password'],version=n['version'])
         elif kind=='cf':
-            node.update(port=443,server=p['sni'],servername=p['sni'],uuid=n['settings']['clients'][0]['id'])
+            uid=n['users'][0]['uuid'] if b['core']=='sing-box' else n['settings']['clients'][0]['id']
+            node.update(port=443,server=p['sni'],servername=p['sni'],uuid=uid)
             node['ws-opts'].update(path=p['ws_path']);node['ws-opts'].setdefault('headers',{})['Host']=p['sni']
         elif kind=='xhttp':
             node.update(port=443,server=p['sni'],servername=p['sni'],uuid=n['settings']['clients'][0]['id'])

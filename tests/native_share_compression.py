@@ -16,7 +16,7 @@ class Backend(http.server.BaseHTTPRequestHandler):
 backend=http.server.ThreadingHTTPServer(('127.0.0.1',3001),Backend)
 thread=threading.Thread(target=backend.serve_forever,daemon=True);thread.start()
 shares='''# BEGIN EXTERNAL SEVEN SHARES
-@external_seven_share path /share/col/external-seven /share/file/external-seven-shadowrocket-config /share/file/external-seven-shadowrocket-ads
+@external_seven_share path /share/col/external-seven /share/file/external-seven-shadowrocket-config /share/file/external-seven-shadowrocket-ads /share/file/external-seven-de-mia-ingress
 handle @external_seven_share {
  header Cache-Control "private, no-store"
  header Vary "User-Agent"
@@ -45,7 +45,7 @@ try:
                     except OSError:pass
                     time.sleep(.05)
                 else:raise RuntimeError('Caddy fixture unavailable')
-                for path in ['/share/col/external-seven','/share/file/external-seven-shadowrocket-config','/share/file/external-seven-shadowrocket-ads']:
+                for path in ['/share/col/external-seven','/share/file/external-seven-shadowrocket-config','/share/file/external-seven-shadowrocket-ads','/share/file/external-seven-de-mia-ingress']:
                     status,headers,plain=request(path+'?token=fixture-only','identity')
                     assert status==200 and plain==BODY and 'Content-Encoding' not in headers
                     status,headers,compressed=request(path+'?token=fixture-only','gzip')

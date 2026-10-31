@@ -20,7 +20,7 @@ flowchart LR
 从 GitHub Release 下载版本包和 SHA256SUMS，核验后运行：
 ```sh
 sha256sum -c SHA256SUMS
-python3 install.py argosbx-fleet-v1.2.24.tar.gz --sha256 <已核对的SHA256>
+python3 install.py argosbx-fleet-v1.2.25.tar.gz --sha256 <已核对的SHA256>
 ```
 安装到 `/opt/argosbx-fleet/<版本>`，原子更新 `current` 符号链接。同一版本内容不可覆盖。升级使用相同命令；数据与凭据不在发布包内。
 ## 配置入口

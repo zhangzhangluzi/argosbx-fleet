@@ -10,8 +10,10 @@ def compression_render(text):
     if text.count(start_marker)!=1 or text.count(end_marker)!=1:raise ValueError('外部分享区块缺失或重复，未修改压缩配置')
     start=text.index(start_marker);end=text.index(end_marker,start);block=text[start:end]
     matcher=re.findall(r'(?m)^\s*@external_seven_share path ([^\n]+)$',block)
-    allowed={'/share/col/external-seven','/share/file/external-seven-shadowrocket-config','/share/file/external-seven-shadowrocket-ads'}
-    if len(matcher)!=1 or set(matcher[0].split())!=allowed or block.count('handle @external_seven_share {')!=1:
+    required={'/share/col/external-seven','/share/file/external-seven-shadowrocket-config','/share/file/external-seven-shadowrocket-ads'}
+    allowed=required|{'/share/file/external-seven-de-mia-ingress'}
+    paths=matcher[0].split() if len(matcher)==1 else []
+    if not required<=set(paths)<=allowed or len(paths)!=len(set(paths)) or block.count('handle @external_seven_share {')!=1:
         raise ValueError('无法确认外部分享压缩作用域')
     if 'reverse_proxy 127.0.0.1:3001' not in block or 'private, no-store' not in block:raise ValueError('外部分享后端或私有响应策略不匹配')
     encodings=re.findall(r'(?m)^\s*encode\s+([^\n]+)$',block)

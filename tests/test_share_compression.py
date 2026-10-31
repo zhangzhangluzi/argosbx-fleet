@@ -20,6 +20,16 @@ class CompressionTests(unittest.TestCase):
         result=routes.compression_render(SHARE)
         self.assertEqual(result.replace(' encode gzip\n',''),SHARE)
         self.assertEqual(routes.compression_render(result),result)
+    def test_existing_optional_ingress_share_keeps_its_path_and_auth_scope(self):
+        text=SHARE.replace('/share/file/external-seven-shadowrocket-ads\n','/share/file/external-seven-shadowrocket-ads /share/file/external-seven-de-mia-ingress\n')
+        result=routes.compression_render(text)
+        self.assertEqual(result.replace(' encode gzip\n',''),text)
+        self.assertEqual(routes.compression_render(result),result)
+    def test_duplicate_missing_or_unknown_optional_paths_are_rejected(self):
+        for suffix in ['/share/col/external-seven','/api/private','/share/file/external-seven-unknown']:
+            text=SHARE.replace('/share/file/external-seven-shadowrocket-ads\n','/share/file/external-seven-shadowrocket-ads '+suffix+'\n')
+            with self.subTest(suffix=suffix),self.assertRaises(ValueError):routes.compression_render(text)
+        with self.assertRaises(ValueError):routes.compression_render(SHARE.replace(' /share/col/external-seven',''))
     def test_unknown_scope_backend_or_existing_encoding_fails_closed(self):
         for value in [SHARE.replace('/share/col/external-seven','/api/private'),SHARE.replace('127.0.0.1:3001','127.0.0.1:9000'),SHARE.replace('handle @external_seven_share {','handle @external_seven_share {\n encode zstd'),SHARE+SHARE]:
             with self.subTest(value=value),self.assertRaises(ValueError):routes.compression_render(value)

@@ -4,8 +4,23 @@ from pathlib import Path
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 import bootstrap,agent,udp_buffers
+import reality_compat
 from onboard import defaults
 from storage import save
+
+# Fixture-only exceptions. Production retains the private-address fallback block
+# and permits only the local DNS stub, not these loopback HTTP/UDP echo services.
+real_targets=reality_compat.xray_targets
+def fixture_targets(configs):
+ configs=real_targets(configs)
+ for config in configs.values():
+  for out in config.get('outbounds',[]):
+   if out.get('protocol')=='freedom':
+    rules=out['settings']['finalRules']
+    for rule in [{'action':'allow','network':'tcp','ip':['127.0.0.1/32'],'port':'25888,25889'}, {'action':'allow','network':'udp','ip':['127.0.0.1/32'],'port':25891}]:
+     if rule not in rules:rules.insert(0,rule)
+ return configs
+reality_compat.xray_targets=fixture_targets
 
 server=defaults('ci','JP','日本','127.0.0.1',None,'example.com','/fixture','/fixture')
 server['protocols']['reality'].update(cover_host='cover.example.com',cover_port=25888,sni='ci.example.com')

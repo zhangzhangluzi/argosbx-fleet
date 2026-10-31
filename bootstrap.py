@@ -134,7 +134,9 @@ def install(server,connector_token,test_certificate=False):
             from ech import configure
             configure(config,state)
             j['candidate']={'configs':config,'state':state};save(JOURNAL,j)
-        config=j['candidate']['configs'];state=j['candidate']['state'];agent.validate_native(state,config)
+        config=j['candidate']['configs'];state=j['candidate']['state']
+        from reality_compat import xray_targets
+        config=xray_targets(config);agent.validate_native(state,config)
         for p,c in config.items():save(p,c)
         state['native_sha256']={p:agent.sha(Path(p).read_text()) for p in config};save(agent.STATE,state)
         unit('xr',str(NATIVE/'xray')+' run -c '+str(NATIVE/'xr.json'))

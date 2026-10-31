@@ -28,6 +28,8 @@ def stage(settings):
     native,_,node=create('xhttp',settings,state['certificates'])
     base=next(c for p,c in before.items() if engines(state)[p]['core']=='xray')
     cfg=copy.deepcopy(base);cfg['inbounds']=[native];cfg.pop('api',None)
+    from reality_compat import xray_targets
+    cfg=xray_targets({str(CONFIG):cfg})[str(CONFIG)]
     after={**before,str(CONFIG):cfg};updated=copy.deepcopy(state)
     updated['engines']={**engines(state),str(CONFIG):{'core':'xray','service':SERVICE}}
     updated['protocols']['xhttp']=settings

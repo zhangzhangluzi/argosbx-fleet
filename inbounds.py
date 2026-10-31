@@ -6,7 +6,7 @@ import subprocess
 import uuid
 from protocols import protocol_type,validate_settings,LABELS,XHTTP_REUSE
 
-CORES={'reality':'xray','hy2':'xray','cf':'xray','anytls':'sing-box','shadowtls':'sing-box','salamander':'sing-box','xhttp':'xray'}
+CORES={'reality':'sing-box','hy2':'xray','cf':'xray','anytls':'sing-box','shadowtls':'sing-box','salamander':'sing-box','xhttp':'xray'}
 
 def vless_encryption():
     import re
@@ -44,6 +44,9 @@ def create(ident,p,certificates,keygen=x25519):
     if kind=='reality':
         private,public=keygen();short=secrets.token_hex(8)
         native.update(protocol='vless',settings={'clients':[{'id':uid,'flow':'xtls-rprx-vision'}],'decryption':'none'},streamSettings={'network':'raw','security':'reality','realitySettings':{'target':p['cover_host']+':'+str(p['cover_port']),'serverNames':[p['sni']],'privateKey':private,'shortIds':[short]}})
+        native['port']=native.pop('listen_port')
+        from reality_compat import to_sing
+        native=to_sing(native,p)
         node.update(type='vless',uuid=uid,flow='xtls-rprx-vision',tls=True,servername=p['sni'],**{'client-fingerprint':'chrome','reality-opts':{'public-key':public,'short-id':short}})
     elif kind=='hy2':
         native.update(protocol='hysteria',settings={'version':2,'clients':[{'auth':password}]},streamSettings={'network':'hysteria','security':'tls','tlsSettings':{'alpn':p['alpn'],'certificates':[{'certificateFile':pair['certificate_file'],'keyFile':pair['key_file']}]}})
@@ -84,6 +87,9 @@ def reconcile(configs,state,desired,keygen=x25519):
         old=next((x for x in result[b['path']]['inbounds'] if x.get('tag')==b['tag']),b['inbound'])
         if protocol_type(ident,state['protocols'][ident])=='shadowtls':tags.add(old['detour'])
         result[b['path']]['inbounds']=[x for x in result[b['path']]['inbounds'] if x.get('tag') not in tags]
+        if protocol_type(ident,state['protocols'][ident])=='reality' and b['core']=='sing-box':
+            from reality_compat import cleanup_routes
+            cleanup_routes(result[b['path']],b['tag'])
         for key in ('bindings','templates','protocols'):updated[key].pop(ident,None)
     added=[]
     for ident,p in desired.items():

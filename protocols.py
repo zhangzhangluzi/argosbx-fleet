@@ -144,15 +144,18 @@ def adopt(configs,clients,services):
     for ident,b in bindings.items():
         n=entry(configs[b['path']],b);p={'enabled':True,'port':n.get('listen_port',n.get('port')),'listen':n.get('listen','0.0.0.0')}
         tls=n.get('tls',n.get('streamSettings',{}).get('tlsSettings'))
-        if tls:
+        if tls and ident!='reality':
             if b['core']=='sing-box': cert,key=tls['certificate_path'],tls['key_path']
             else:cert,key=tls['certificates'][0]['certificateFile'],tls['certificates'][0]['keyFile']
             pair={'certificate_file':cert,'key_file':key}
             ref=next((k for k,v in state['certificates'].items() if v==pair), 'tls'+str(len(state['certificates'])+1))
             state['certificates'][ref]=pair;p.update(certificate=ref,sni=templates[ident].get('sni',templates[ident].get('servername')),alpn=tls.get('alpn',[]))
         if ident=='reality':
-            r=n['streamSettings']['realitySettings'];host,port=r.get('target',r.get('dest')).rsplit(':',1)
-            p.update(sni=r['serverNames'][0],cover_host=host,cover_port=int(port))
+            if b['core']=='sing-box':
+                r=n['tls']['reality'];p.update(sni=n['tls']['server_name'],cover_host=r['handshake']['server'],cover_port=r['handshake']['server_port'])
+            else:
+                r=n['streamSettings']['realitySettings'];host,port=r.get('target',r.get('dest')).rsplit(':',1)
+                p.update(sni=r['serverNames'][0],cover_host=host,cover_port=int(port))
         if ident=='shadowtls':p.update(cover_host=n['handshake']['server'],cover_port=n['handshake']['server_port'])
         if ident=='cf':p.update(sni=templates[ident]['servername'],ws_path=n['streamSettings']['wsSettings']['path'])
         if ident=='xhttp':p.update(sni=templates[ident]['servername'],path=n['streamSettings']['xhttpSettings']['path'],mode=n['streamSettings']['xhttpSettings']['mode'])
@@ -199,7 +202,11 @@ def render(configs,state,desired):
                 tls=n['streamSettings']['tlsSettings'];tls['certificates'][0].update(certificateFile=c['certificate_file'],keyFile=c['key_file'])
                 tls['alpn']=p.get('alpn',[])
         if kind=='reality':
-            r=n['streamSettings']['realitySettings'];r['serverNames']=[p['sni']];r['target']=p['cover_host']+':'+str(p['cover_port']);r.pop('dest',None)
+            if b['core']=='sing-box':
+                if ipaddress.ip_address(p['listen']).is_unspecified:n['listen']='::'
+                n['tls']['server_name']=p['sni'];n['tls']['reality']['handshake'].update(server=p['cover_host'],server_port=p['cover_port'])
+            else:
+                r=n['streamSettings']['realitySettings'];r['serverNames']=[p['sni']];r['target']=p['cover_host']+':'+str(p['cover_port']);r.pop('dest',None)
         if kind=='shadowtls':n['handshake'].update(server=p['cover_host'],server_port=p['cover_port'])
         if kind=='cf':n['streamSettings']['wsSettings']['path']=p['ws_path']
         if kind=='xhttp':n['streamSettings']['xhttpSettings'].update(path=p['path'],mode=p['mode'])
@@ -228,7 +235,11 @@ def export(configs,state):
         client=copy.deepcopy(p.get('client',{}));reuse=client.pop('reuse-settings',None)
         node.update(client);node['port']=p['port']
         if kind=='reality':
-            r=n['streamSettings']['realitySettings'];node.update(uuid=n['settings']['clients'][0]['id'],servername=r['serverNames'][0]);node['reality-opts']['short-id']=node['reality-opts']['short-id'] if str(node['reality-opts']['short-id']) in r['shortIds'] else r['shortIds'][0]
+            if b['core']=='sing-box':
+                r=n['tls']['reality'];shorts=r['short_id'];node.update(uuid=n['users'][0]['uuid'],servername=n['tls']['server_name'])
+            else:
+                r=n['streamSettings']['realitySettings'];shorts=r['shortIds'];node.update(uuid=n['settings']['clients'][0]['id'],servername=r['serverNames'][0])
+            node['reality-opts']['short-id']=node['reality-opts']['short-id'] if str(node['reality-opts']['short-id']) in shorts else shorts[0]
         elif kind=='hy2':node.update(password=n['settings']['clients'][0]['auth'],sni=p['sni'],alpn=p['alpn'])
         elif kind in ('anytls','salamander'):
             node.update(password=n['users'][0]['password'],sni=p['sni'])

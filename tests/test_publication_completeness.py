@@ -83,6 +83,7 @@ class ConnectorTests(unittest.TestCase):
     def health(self,args,status=200):
         with patch.object(agent,'cmd',side_effect=['','42']) as cmd,patch.object(Path,'resolve',return_value=Path('/usr/local/bin/cloudflared')),patch.object(Path,'read_bytes',return_value=('cloudflared\0'+args).encode()),patch('http.client.HTTPConnection') as http:
             http.return_value.getresponse.return_value.status=status
+            http.return_value.getresponse.return_value.read.return_value=b'cloudflared_tunnel_ha_connections 4\n'
             value=agent.cloudflare_health(self.state)
             self.assertTrue(all('restart' not in c.args[0] for c in cmd.call_args_list))
             return value,http
@@ -101,8 +102,9 @@ class ConnectorTests(unittest.TestCase):
             for status,ready in ((200,True),(503,False),(302,False)):
                 value,http=self.health(args,status)
                 self.assertEqual(value['ready'],ready)
-                http.return_value.request.assert_called_once_with('GET','/ready')
-                http.return_value.close.assert_called_once()
+                requests=[c.args for c in http.return_value.request.call_args_list]
+                self.assertEqual(requests,[('GET','/ready'),('GET','/metrics')] if ready else [('GET','/ready')])
+                self.assertEqual(http.return_value.close.call_count,2 if ready else 1)
 
     def test_no_metrics_is_explicitly_unknown_and_remote_endpoint_not_contacted(self):
         value,http=self.health('tunnel\0run\0')

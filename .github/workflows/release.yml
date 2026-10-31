@@ -30,6 +30,7 @@ jobs:
           sudo python3 install.py dist/argosbx-fleet-*.tar.gz --sha256 "$(cut -d' ' -f1 dist/SHA256SUMS)"
           sudo python3 -B tests/native_udp_buffers.py
           sudo python3 -B tests/native_install.py
+          sudo python3 -B tests/native_share_compression.py
   release:
     if: startsWith(github.ref, 'refs/tags/')
     needs: check

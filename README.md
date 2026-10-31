@@ -20,7 +20,7 @@ flowchart LR
 从 GitHub Release 下载版本包和 SHA256SUMS，核验后运行：
 ```sh
 sha256sum -c SHA256SUMS
-python3 install.py argosbx-fleet-v1.2.23.tar.gz --sha256 <已核对的SHA256>
+python3 install.py argosbx-fleet-v1.2.24.tar.gz --sha256 <已核对的SHA256>
 ```
 安装到 `/opt/argosbx-fleet/<版本>`，原子更新 `current` 符号链接。同一版本内容不可覆盖。升级使用相同命令；数据与凭据不在发布包内。
 ## 配置入口
@@ -67,6 +67,8 @@ python3 release.py dist
 测试涵盖协议参数、导出、并发/中断恢复、域名冲突、发布格式和升级校验。生产验收额外比较代理进程 PID、原生配置哈希、订阅节点、原统一 URL 和隔离客户端连接。HTTP 200 只代表请求成功，不等于登录后的业务全过程已验收。
 
 ## 证书与线上检查
+`inspect` 和网络诊断会读取已有 cloudflared 的本机 `/ready` 与有界 `/metrics`，区分完全连接、冗余减少、未取得指标和零连接。`request_errors_total` 是累计计数，包含客户端取消，不能直接作为线路中断次数。网络快照同时记录 CF 连接器进程和到边缘的连接；诊断期间仅 CF 进程重启也会使进程保护检查失败。上述读取不修改隧道、不重启服务，不暴露指标标签或凭据。
+已使用外部七国分享区块的部署可以用 `country_routes.py compress` 校验并热加载这三个既有路径的 gzip，随后从原链接分别验收未压缩／压缩内容、鉴权与响应头，再执行 `compression-finish`；失败使用 `compression-recover` 恢复本次配置。没有已登记分享区块或已有自定义编码时拒绝猜测。该操作不重启 Caddy、代理或 Sub-Store，也不增加缓存或公网路径；压缩减少传输体积，不等同于减少订阅生成 CPU 时间。
 `fleetctl.py inspect --server jp` 返回 `certificate_health`：剩余天数、14 天续期提醒、SNI/私钥匹配和有效期。计划、应用和订阅发布均阻止未生效、失效、不足 24 小时或不匹配的证书。检查只读，不自行续签、重启或修改现有 Caddy 自动续期流程。
 
 ## v1.1：空白服务器一键接入

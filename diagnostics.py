@@ -13,6 +13,83 @@ from pathlib import Path
 from protocols import protocol_type
 
 
+def _metric_total(text, name):
+    """Read numeric counters only; never expose metric labels or raw response text."""
+    import math
+    values=[]
+    for line in text.splitlines():
+        match=re.fullmatch(re.escape(name)+r'(?:\{[^{}\n]*\})?\s+([^\s]+)(?:\s+\d+)?',line)
+        if not match:continue
+        try:value=float(match[1])
+        except ValueError:return None
+        if not math.isfinite(value) or value<0 or not value.is_integer():return None
+        values.append(int(value))
+    return sum(values) if values else None
+
+
+def connector_health(state, command=None, root=Path('/proc')):
+    """Bounded local readiness/HA evidence; no provider API or service mutation."""
+    if not any(p['enabled'] and protocol_type(i,p) in ('cf','xhttp') for i,p in state.get('protocols',{}).items()):
+        return {'required':False}
+    import http.client
+    command=command or (lambda args:subprocess.check_output(args,text=True,timeout=5))
+    result={'required':True,'service_active':False,'ready':None,'ha_connections':None,
+            'redundancy':'unknown','metrics_status':'not_observed'}
+    try:
+        command(['systemctl','is-active','--quiet','argo'])
+        pid=int(command(['systemctl','show','argo','-p','MainPID','--value']).strip())
+        if pid<=0:raise ValueError('No connector process')
+        proc=root/str(pid)
+        if 'cloudflared' not in (proc/'exe').resolve().name:raise ValueError('Unexpected process')
+        result.update(service_active=True,pid=pid)
+        args=(proc/'cmdline').read_bytes().decode().split('\0')
+        def option(name,default=None):
+            for index,arg in enumerate(args):
+                if arg==name:return args[index+1]
+                if arg.startswith(name+'='):return arg.split('=',1)[1]
+            return default
+        try:environment=dict(v.split('=',1) for v in (proc/'environ').read_bytes().decode().split('\0') if '=' in v)
+        except (OSError,UnicodeError):environment={}
+        protocol=option('--protocol',environment.get('TUNNEL_TRANSPORT_PROTOCOL','auto'))
+        result['configured_protocol']=protocol if protocol in ('auto','http2','quic') else 'unknown'
+        expected=option('--ha-connections',environment.get('TUNNEL_HA_CONNECTIONS','4'))
+        expected=int(expected) if expected.isdecimal() and 0<int(expected)<=1024 else None
+        result['expected_ha_connections']=expected
+        endpoint=option('--metrics')
+        if endpoint is None:
+            result['readiness_check']='metrics-not-explicit';return result
+        host,port=endpoint.rsplit(':',1);host=host.strip('[]');port=int(port)
+        if not ipaddress.ip_address(host).is_loopback or not 0<port<65536:raise ValueError('Metrics must be loopback')
+        def fetch(path,limit):
+            connection=http.client.HTTPConnection(host,port,timeout=3)
+            try:
+                connection.request('GET',path);response=connection.getresponse()
+                if response.status!=200:return response.status,None
+                body=response.read(limit+1)
+                if len(body)>limit:raise ValueError('Oversize local metrics')
+                return response.status,body.decode()
+            finally:connection.close()
+        status,_=fetch('/ready',4096);result['ready']=status==200
+        result['readiness_check']='loopback-ready'
+        if not result['ready']:return result
+        try:
+            status,body=fetch('/metrics',1048576)
+            if status!=200:raise ValueError('Local metrics unavailable')
+            connections=_metric_total(body,'cloudflared_tunnel_ha_connections')
+            result.update(ha_connections=connections,metrics_status='available' if connections is not None else 'partial')
+            result['request_errors_total']=_metric_total(body,'cloudflared_tunnel_request_errors')
+            result['requests_total']=_metric_total(body,'cloudflared_tunnel_total_requests')
+            # Canceled client streams also increment this counter; it is not an outage rate.
+            result['request_error_counter_scope']='cumulative_including_client_cancellation'
+            if connections is not None:
+                result['redundancy']='none' if connections==0 else 'full' if expected is not None and connections>=expected else 'reduced' if expected is not None else 'unknown'
+                if connections==0:result['ready']=False
+        except (OSError,ValueError,UnicodeError,http.client.HTTPException):result['metrics_status']='unavailable'
+    except (OSError,ValueError,IndexError,UnicodeError,subprocess.SubprocessError,http.client.HTTPException):
+        result['ready']=False;result['readiness_check']='unavailable'
+    return result
+
+
 def error_info(error):
     result = {'type': type(error).__name__}
     if isinstance(getattr(error, 'errno', None), int):
@@ -42,10 +119,10 @@ def counters(root=Path('/proc')):
 def snapshot(state, root=Path('/proc')):
     """Read socket ownership and cumulative drops, without copying socket handles."""
     services = {}
-    for binding in state['bindings'].values():
-        unit = binding['service']
-        if unit in services:
-            continue
+    units={binding['service'] for binding in state['bindings'].values()}
+    uses_cf=any(p['enabled'] and protocol_type(i,p) in ('cf','xhttp') for i,p in state.get('protocols',{}).items())
+    if uses_cf:units.add('argo.service')
+    for unit in sorted(units):
         try:
             proc = subprocess.run(['systemctl', 'show', unit, '-p', 'MainPID', '-p', 'ActiveState'],
                                   capture_output=True, text=True, check=True, timeout=5)
@@ -71,11 +148,13 @@ def snapshot(state, root=Path('/proc')):
                 parts = line.split()
                 if len(parts) < 10 or parts[9] not in owners:
                     continue
-                if table.startswith('tcp') and parts[3] != '0A':
+                if table.startswith('tcp') and parts[3] != '0A' and not (owners[parts[9]]=='argo.service' and parts[3]=='01'):
                     continue
                 address, port = parts[1].split(':')
                 sockets.append({'service': owners[parts[9]], 'transport': table.rstrip('6'),
                                 'family': 6 if table.endswith('6') else 4, 'port': int(port, 16),
+                                'state':'listening' if parts[3]=='0A' else 'connected',
+                                'remote_port':int(parts[2].rsplit(':',1)[1],16),
                                 'inode': parts[9], 'receive_queue': int(parts[4].split(':')[1], 16),
                                 'drops': int(parts[-1]) if table.startswith('udp') else None})
         except (OSError, ValueError, IndexError):
@@ -84,10 +163,12 @@ def snapshot(state, root=Path('/proc')):
         boot_id = (root/'sys/kernel/random/boot_id').read_text().strip()
     except OSError:
         boot_id = None
-    return {'boot_id': boot_id, 'monotonic': time.monotonic(), 'counters': counters(root),
+    result={'boot_id': boot_id, 'monotonic': time.monotonic(), 'counters': counters(root),
             'services': {k: {f: v for f, v in value.items() if f != 'inodes'} for k, value in services.items()},
             'sockets': sockets, 'packet_capture_performed': False,
             'cloud_firewall': 'not_observed', 'syn_arrival': 'not_observed'}
+    if uses_cf:result['cloudflare']=connector_health(state,root=root)
+    return result
 
 
 def delta(before, after):

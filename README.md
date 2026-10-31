@@ -20,7 +20,7 @@ flowchart LR
 从 GitHub Release 下载版本包和 SHA256SUMS，核验后运行：
 ```sh
 sha256sum -c SHA256SUMS
-python3 install.py argosbx-fleet-v1.2.10.tar.gz --sha256 <已核对的SHA256>
+python3 install.py argosbx-fleet-v1.2.23.tar.gz --sha256 <已核对的SHA256>
 ```
 安装到 `/opt/argosbx-fleet/<版本>`，原子更新 `current` 符号链接。同一版本内容不可覆盖。升级使用相同命令；数据与凭据不在发布包内。
 ## 配置入口
@@ -240,3 +240,6 @@ Sub-Store 在双地址源站出现首次连接超时时，可用原生 Node 选�
 新机的 CF VMess WebSocket 与 REALITY 均由现有 sing-box 承接；Xray 继续处理普通 HY2 和 XHTTP。现有 Xray WebSocket 入站仍可读取、修改和导出。`vmess_compat.migrate` 生成保留 UUID、端口、路径和全部导出节点的纯迁移候选，可与 `reality_compat.migrate` 组合；遇到自定义路由、安全设置或旧式非零 alterId 时拒绝自动转换。
 sing-box 客户端在 TLS 下会把 VMess `auto` 转为 `zero`，而 Xray 26.10.29 移除了该模式的接收支持。仅测试不带 TLS 的回环 WebSocket 无法发现这个差异。后端兼容方案保留已经导入的客户端参数，不依赖先刷新订阅或关闭 TLS 验证。CI 用独立 TLS 转发夹具覆盖 auto、zero、AES-GCM、ChaCha20-Poly1305 的真实 HTTPS／UDP；生产验收还需通过原 Cloudflare 入口及独立服务器检查出口。
 新机固定隧道版本为 cloudflared 2026.10.7；现有隧道需单独分批更新，保持协议、连接凭据、路由和原订阅地址。普通维护工具安装不执行迁移或重启。
+
+## 已验证的聚合器运行环境
+v1.2.23 的验证矩阵包含 Node.js 24.22.2 LTS 与 Sub-Store 2.44.2。现有数据的隔离副本已验证旧/新后台在新 Node 上的完整订阅生成一致性；维护包安装不会自动升级这些独立运行组件，实际切换仍使用各部署的事务与公开链接验收。

@@ -1,5 +1,5 @@
 {
-  "version": "v1.2.22",
+  "version": "v1.2.23",
   "python_min": "3.10",
   "dependencies": [
     "PyYAML"
@@ -8,7 +8,8 @@
     "xray": "26.10.29",
     "sing-box": "1.14.4",
     "cloudflared": "2026.10.7",
-    "sub-store": "2.42.3"
+    "sub-store": "2.44.2",
+    "node": "24.22.2"
   },
   "updates_proxy_binaries": false
 }

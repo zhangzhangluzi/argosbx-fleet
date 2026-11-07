@@ -5,9 +5,11 @@ from fleet import read, region_spec, host_map, active_config
 from storage import save
 from protocols import LABELS, IDS, node_label, protocol_type, families as node_families
 from dns_policy import harden_config, harden_shadowrocket
+import ad_rules
 root=pathlib.Path(__file__).parent
 stash_compat=(root/'stash-compat.js').read_text()
 inventory=active_config(globals().get('inventory_override') or read())
+ad_snapshot=ad_rules.load(inventory)
 node_hosts=host_map(inventory)
 specs={s['id']:s for s in inventory['servers']}
 countries={s['country']:s['country_name'] for s in specs.values()}
@@ -16,13 +18,19 @@ purpose_groups=['地区-'+countries[c] for c in inventory['purpose_order']]
 subscriptions=[]
 for country,server in specs.items():
     script=(root/'region-processor.js').read_text().replace('SPEC',json.dumps(region_spec(server),ensure_ascii=False))
-    subscriptions.append({'name':server['subscription']['name'],'displayName':server['name']+' · ArgoSBX','source':'remote','url':server['subscription']['url'],'ua':'ClashMeta','process':[{'type':'Script Operator','args':{'mode':'script','content':script}}]})
+    source = server['subscription']
+    source_url = source['url']
+    if source.get('cache_key'):
+        source_url += '#cacheKey=' + source['cache_key']
+    subscriptions.append({'name':source['name'],'displayName':server['name']+' · ArgoSBX','source':'remote','url':source_url,'ua':'ClashMeta','process':[{'type':'Script Operator','args':{'mode':'script','content':script}}]})
 files=[]
 for fmt in ('clash','stash'):
     base=yaml.safe_load((root/'templates'/('base-'+fmt+'.yaml')).read_text())
     base.pop('proxies',None);base.pop('proxy-groups',None)
     base['rules']=[r.replace(',UDP线路', ',日常线路') for r in base['rules']]
     base=harden_config(base,fmt,hosts=node_hosts,tailscale=inventory.get('tailscale'))
+    if ad_snapshot:
+        ad_rules.use_provider(base,inventory,ad_snapshot)
     health={'url':'https://www.gstatic.com/generate_204','interval':inventory.get('health',{}).get('interval',900),'tolerance':inventory.get('health',{}).get('tolerance',100),'lazy':True}
     if fmt == 'clash':
         base['unified-delay']=True
@@ -86,7 +94,10 @@ for code,label in countries.items():
 sr=sr[:start]+'\n'.join(groups)+'\n'+sr[end:]
 sr=sr.replace('PROTOCOL,UDP,UDP线路', 'PROTOCOL,UDP,日常线路')
 files.append({'name':'shadowrocket-config','displayName':'Shadowrocket 自动策略','source':'local','content':sr,'process':[]})
-files.insert(0,{'name':'shadowrocket-ads','displayName':'Shadowrocket · 广告域名集','source':'remote','url':'https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/geosite/category-ads-all.list','process':[{'type':'Script Operator','args':{'mode':'script','content':(root/'templates/shadowrocket-ads.js').read_text()}}]})
+if ad_snapshot:
+    files.insert(0,ad_rules.file_object('shadowrocket-ads','Shadowrocket · 广告域名集',ad_snapshot))
+else:
+    files.insert(0,{'name':'shadowrocket-ads','displayName':'Shadowrocket · 广告域名集','source':'remote','url':'https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/geosite/category-ads-all.list','process':[{'type':'Script Operator','args':{'mode':'script','content':(root/'templates/shadowrocket-ads.js').read_text()}}]})
 payload={'subscriptions':subscriptions,'collections':[{'name':'all','displayName':' · '.join(countries.values()),'subscriptions':[s['subscription']['name'] for s in specs.values()],'process':[]}],'files':files}
 payload['collections'] += [{'name':'shadowrocket-'+code.lower(),'displayName':'ArgoSBX · '+label,'subscriptions':[s['subscription']['name'] for s in specs.values() if s['country']==code],'process':[]} for code,label in countries.items()]
 export_processor={'type':'Response Transformer','customName':'FlClash / Stash 完整配置导出','args':{'mode':'script','content':(root/'flclash-response-transformer.js').read_text().replace('CF_HOSTS',json.dumps(list(dict.fromkeys([s['domains']['cf'] for s in specs.values() if s['domains']['cf']]+[p['sni'] for s in specs.values() for i,p in s.get('protocols',{}).items() if protocol_type(i,p) in ('cf','xhttp') and p['enabled']])))).replace('PROFILE_TITLES',json.dumps({'all':'ArgoSBX '+'-'.join(countries),**{'shadowrocket-'+code.lower():'ArgoSBX '+code for code in countries},**{s['subscription']['name']:'ArgoSBX '+s['name'] for s in specs.values()}},ensure_ascii=False)),'arguments':{'profile':'clash','stash_profile':'stash'}}}

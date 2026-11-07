@@ -72,6 +72,8 @@ def validate(data):
         if not ssh.get('known_hosts'): raise ValueError('必须指定可信 known_hosts')
         check(s['subscription']['name'], r'[a-zA-Z0-9_-]{1,64}', 'subscription.name')
         url(s['subscription']['url'], 'subscription.url')
+        if 'cache_key' in s['subscription']:
+            check(s['subscription']['cache_key'], r'[a-zA-Z0-9_-]{1,64}', 'subscription.cache_key')
         if type(s['salamander_ipv6']) is not bool: raise ValueError('salamander_ipv6 必须为布尔值')
         if 'onboarding' in s:
             onboarding=s['onboarding']
@@ -80,6 +82,11 @@ def validate(data):
             if not onboarding['certificate_host'].endswith('.'+onboarding['zone']):raise ValueError('证书域名不在所选 zone 下')
     for key in ('backend_url', 'public_url'):
         url(data['subscription'][key], key)
+    if 'ad_rules_snapshot' in data['subscription']:
+        check(data['subscription']['ad_rules_snapshot'], r'[^\r\n]+', 'subscription.ad_rules_snapshot')
+    cache_keys = [s['subscription']['cache_key'] for s in data['servers'] if 'cache_key' in s['subscription']]
+    if len(cache_keys) != len(set(cache_keys)):
+        raise ValueError('各订阅源需要独立缓存键')
     if not isinstance(data['purpose_order'], list) or len(set(data['purpose_order'])) != len(data['purpose_order']):
         raise ValueError('purpose_order 必须为不重复的国家代码列表')
     if set(data['purpose_order']) != set(regions): raise ValueError('purpose_order 必须包含所有国家且只包含已有国家')

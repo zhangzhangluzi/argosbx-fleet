@@ -17,7 +17,11 @@ STASH_AI_DNS = ['https://8.8.8.8/dns-query', 'https://8.8.4.4/dns-query']
 FEISHU = ['feishu.cn','feishucdn.com']
 # These are advertiser consoles, not ad-delivery endpoints for this profile.
 # Keep the allowlist exact so unrelated SDK and tracking hosts remain blockable.
-BUSINESS_CONSOLES = ['ads.applovin.com', 'ads.tiktok.com']
+BUSINESS_CONSOLES = [
+    'ads.applovin.com', 'ads.tiktok.com',
+    'max.applovin.com', 'dash.applovin.com',
+    'developers.applovin.com', 'support.applovin.com',
+]
 # Verified public console pages, their UI bundles and application bootstrap API.
 # Do not include platform-wide suffixes, telemetry or conversion endpoints.
 DOMESTIC_BUSINESS_HOSTS = [

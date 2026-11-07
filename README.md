@@ -20,7 +20,7 @@ flowchart LR
 从 GitHub Release 下载版本包和 SHA256SUMS，核验后运行：
 ```sh
 sha256sum -c SHA256SUMS
-python3 install.py argosbx-fleet-v1.2.25.tar.gz --sha256 <已核对的SHA256>
+python3 install.py argosbx-fleet-v1.2.26.tar.gz --sha256 <已核对的SHA256>
 ```
 安装到 `/opt/argosbx-fleet/<版本>`，原子更新 `current` 符号链接。同一版本内容不可覆盖。升级使用相同命令；数据与凭据不在发布包内。
 ## 配置入口
@@ -95,10 +95,12 @@ python3 servers.py publish
 国家 Shadowrocket 订阅使用 `shadowrocket-<国家小写代码>` 聚合，同一国家增加服务器后自动纳入，原统一链接与原国家链接不变。已有 Caddy 认证路由迁移使用 `country_routes.py upgrade`，只热加载原进程；回读原链接后 `commit`，失败时 `recover`。新国家采用同一路由格式，无需逐国修改 Caddy。
 协议计划与应用前均检查真实端口绑定，避免占用 SSH、Caddy 或其他服务；同协议新增入口仍使用独立标识。直连入站禁止回环/组播监听，导出按监听地址族生成 v4/v6；Xray 的未指定地址行为与 sing-box 分别处理。CF 回环地址族同步到隧道目标，WS 仅接受纯路径；域名迁移只更新显式关联的 CF 引用，独立域名保留。
 新机安装中断可原命令续装；如有未完成发布事务，先运行 `servers.py recover`。验收失败不转为 active，已有服务器照常发布。
-`ads.applovin.com`、`ads.tiktok.com` 精确匹配到日常线路，优先于去广告规则；不放行整个 AppLovin/TikTok 域名树。Clash、Stash、Shadowrocket 同步生成，前两者同步显式 DNS 策略。
+`ads.applovin.com`、`ads.tiktok.com` 和已核对的 AppLovin MAX、旧后台跳转、官方帮助入口精确匹配到日常线路。三端优先应用完整域名例外，Clash 和 Stash 同步显式 DNS 策略。
 
 ## 去广告与投放后台例外
 Clash/FlClash、Stash 使用 MetaCubeX `category-ads-all.mrs` 域名表，每 86400 秒更新。规则从上到下首次匹配：精确后台例外优先；命中广告表后交给“去广告”选择组，Clash 开启执行 REJECT，关闭执行 PASS，继续匹配后续应用和国内外规则。Stash 原订阅内同样提供“开启去广告／关闭去广告”分组，默认开启执行 REJECT；关闭后命中广告表的请求跟随日常线路，不再继续后面的国内外分流。这是两端明确的行为差异；Stash 不发出 PASS，也不需要单独安装覆写。其余请求和精确后台例外仍按原规则处理。例外和 DNS 策略由 `dns_policy.py` 一处生成，保持发布与导出一致。Shadowrocket 默认开启同源广告域名集：Sub-Store 将 `+.` 后缀转换为原生 `.` 格式，保留精确后台例外，避免引入更大、不同口径的广告表。
+
+可用 `python3 ad_rules.py <候选快照.json>` 从 GitHub 文件 API 获取同一提交的文本和 MRS，并用已安装的 Node 校验 MRS 类型和条目数。把候选通过标准输入交给订阅服务器的 `country_routes.py ads-stage`，核验版本化 MRS 下载后执行 `ads-finish`。在 `subscription.ad_rules_snapshot` 引用该快照后，原发布流程会校验实际 MRS 下载并生成同版本的 Shadowrocket 本地名单。失败时可继续使用已发布版本。服务器源的 `subscription.cache_key` 对应 Sub-Store 已预热的独立缓存，公网源恢复后可取回更新。
 2026-10-13 对常见投放后台的公开入口、重定向和界面资源核查后，增加以下精确 DIRECT 例外及国内 DoH，不放行平台父域名：
 - `e.qq.com`、`ad.qq.com`：腾讯营销入口、投放平台与同源资源。
 - `ad.e.kuaishou.com`、`ad-m.e.kuaishou.com`：磁力智投电脑和手机版后台。

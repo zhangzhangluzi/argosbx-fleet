@@ -22,7 +22,7 @@ class AdConsoleTests(unittest.TestCase):
 
     def test_no_platform_or_tracking_exemption(self):
         rules = self.dns.guarded_rules([])
-        for host in ['ms.applovin.com', 'www.googleadservices.com', 'frontend-perf-service.e.kuaishou.com',
+        for host in ['applovin.com', 'ms.applovin.com', 'a.applovin.com', 'www.googleadservices.com', 'frontend-perf-service.e.kuaishou.com',
                      'log-sdk.ksapisrv.com', 'e.kuaishou.com', 'adkwai.com', 'byteadverts.com']:
             self.assertFalse(any(r.startswith(('DOMAIN,' + host + ',', 'DOMAIN-SUFFIX,' + host + ',')) for r in rules))
         for host in self.dns.DOMESTIC_BUSINESS_HOSTS + self.dns.BUSINESS_CONSOLES:
@@ -46,4 +46,6 @@ class AdConsoleTests(unittest.TestCase):
         value = self.dns.harden_shadowrocket(base, hosts={})
         for host in self.dns.DOMESTIC_BUSINESS_HOSTS:
             self.assertIn('\nDOMAIN,' + host + ',DIRECT\n', value)
+        for host in ('max.applovin.com', 'dash.applovin.com', 'developers.applovin.com', 'support.applovin.com'):
+            self.assertIn('\nDOMAIN,' + host + ',日常线路\n', value)
         self.assertEqual(self.dns.harden_shadowrocket(value, hosts={}), value)

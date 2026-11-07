@@ -17,12 +17,13 @@ from fleet import WORKSPACE, STATE, read, active_config
 
 WORK = Path(__file__).resolve().parent
 PLAN = STATE/'server-plan.json'
-VALIDATION_VERSION = 2
+VALIDATION_VERSION = 3
 
 
 from storage import save, lock
 from lease import ensure_owned
 import publication
+import ad_rules
 JOURNAL=STATE/'publication-journal.json'
 STAGING=STATE/'staging-journal.json'
 
@@ -87,6 +88,9 @@ def native_preflight(config):
 def prepare(config):
     if JOURNAL.exists() or STAGING.exists():raise ValueError('有未完成发布事务，请先执行 recover')
     native_preflight(config)
+    snapshot = ad_rules.load(config)
+    if snapshot:
+        ad_rules.verify_asset(config, snapshot)
     payload=generate(config)
     items=[]
     for key,kind in [('subscriptions','sub'),('collections','collection'),('files','file')]:
@@ -110,6 +114,8 @@ def stage(config, payload):
     def creating(kind,name):
         created.append((kind,name));save(STAGING,journal)
     rendered={}
+    ad_domains = None
+    has_ads = any(file['name'] == 'shadowrocket-ads' for file in payload['files'])
     aliases={s['name']:prefix+'-'+str(i) for i,s in enumerate(payload['subscriptions'])}
     try:
         for source in payload['subscriptions']:
@@ -132,10 +138,13 @@ def stage(config, payload):
             if source['name']=='shadowrocket-ads':
                 raw=request(config,'/api/file/'+f['name'],raw=True)
                 check_sr_ads(raw)
+                ad_domains = raw
                 rendered[source['name']]=digest(raw)
                 continue
             value=yaml.safe_load(request(config,'/api/file/'+f['name'],raw=True,**({'user_agent':'Stash/3.6.0'} if source['name']=='stash' else {})))
             check_profile(value)
+            if has_ads:
+                ad_rules.check_profile(value, source['name'])
             save(STATE/('validated-'+source['name']+'.json'),value)
             rendered[source['name']]=digest(value)
             names=[n['name'] for n in value['proxies']]
@@ -143,6 +152,8 @@ def stage(config, payload):
             expected=names
             if source['name']=='stash':rendered.update(check_stash_file_cases(config,f['name'],value))
         sr=next(f['content'] for f in payload['files'] if f['name']=='shadowrocket-config')
+        if ad_domains is not None:
+            ad_rules.check_shadowrocket(sr, ad_domains, config['subscription']['backend_url'].rstrip('/')+'/api/file/shadowrocket-ads')
         body=sr.split('[Proxy Group]',1)[1].split('\n[',1)[0]
         sr_names=[]
         for line in body.splitlines():
@@ -281,6 +292,9 @@ def publish(config):
     if plan.get('validation_version')!=VALIDATION_VERSION:raise ValueError('验收规则已更新，请重新 plan')
     if plan['inventory_sha256']!=digest(config):raise ValueError('资料已改变，请重新 plan')
     native_preflight(config)
+    snapshot = ad_rules.load(config)
+    if snapshot:
+        ad_rules.verify_asset(config, snapshot)
     if any(get(config,x['kind'],x['name'])!=x['before'] for x in plan['items']):
         raise ValueError('线上配置已改变，请重新 plan')
     journal=publication.begin(JOURNAL,config,digest)
@@ -296,6 +310,7 @@ def publish(config):
         for fmt in ['clash','stash']:
             value=yaml.safe_load(request(config,'/api/file/'+fmt,raw=True,**({'user_agent':'Stash/3.6.0'} if fmt=='stash' else {})))
             check_profile(value)
+            ad_rules.check_profile(value, fmt)
             if digest(value)!=plan['rendered_sha256'][fmt]:raise ValueError('线上输出与已校验计划不符')
             if fmt=='stash':
                 for key,sha in check_stash_file_cases(config,fmt,value).items():

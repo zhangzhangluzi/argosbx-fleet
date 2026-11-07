@@ -4,6 +4,18 @@ from pathlib import Path
 from storage import atomic,save
 
 COMPRESSION_JOURNAL=Path('/etc/argosbx-fleet/share-compression-journal.json')
+AD_JOURNAL = Path('/etc/argosbx-fleet/ad-route-journal.json')
+AD_ROOT = Path('/srv/argosbx/ad-rules')
+AD_ROUTES = '''# BEGIN FLEET AD RULES
+handle /rules/ad/ads-*.mrs {
+ uri strip_prefix /rules/ad
+ root * /srv/argosbx/ad-rules
+ header Content-Type application/octet-stream
+ header Cache-Control "public, max-age=31536000, immutable"
+ file_server
+}
+# END FLEET AD RULES
+'''
 
 def compression_render(text):
     start_marker='# BEGIN EXTERNAL SEVEN SHARES';end_marker='# END EXTERNAL SEVEN SHARES'
@@ -23,13 +35,13 @@ def compression_render(text):
     block=block.replace('handle @external_seven_share {\n','handle @external_seven_share {\n encode gzip\n',1)
     return text[:start]+block+text[end:]
 
-def compression_upgrade(path=Path('/etc/caddy-sub/argosbx.caddy'),main=Path('/etc/caddy-sub/Caddyfile'),journal=COMPRESSION_JOURNAL):
-    if journal.exists():raise ValueError('分享压缩有未完成事务，先恢复或验收')
-    before=path.read_text();after=compression_render(before)
+def stage_import(render, path, main, journal):
+    if journal.exists():raise ValueError('路由有未完成事务，先恢复或验收')
+    before=path.read_text();after=render(before)
     if before==after:return {'changed':False,'existing_services_restarted':False}
     original_main=main.read_text();marker='import '+str(path)
     if original_main.count(marker)!=1:raise ValueError('Caddy 分享配置导入不唯一')
-    with tempfile.TemporaryDirectory(prefix='argosbx-share-compression-') as directory:
+    with tempfile.TemporaryDirectory(prefix='argosbx-caddy-import-') as directory:
         candidate=Path(directory)/'shares.caddy';candidate.write_text(after);candidate.chmod(0o600)
         validation=Path(directory)/'Caddyfile';validation.write_text(original_main.replace(marker,'import '+str(candidate)));validation.chmod(0o600)
         subprocess.run(['/usr/local/bin/caddy','validate','--config',str(validation),'--adapter','caddyfile'],check=True,capture_output=True)
@@ -37,9 +49,39 @@ def compression_upgrade(path=Path('/etc/caddy-sub/argosbx.caddy'),main=Path('/et
     if pid<=1:raise ValueError('Caddy 运行进程不可确认')
     stat=path.stat();main_hash=hashlib.sha256(original_main.encode()).hexdigest()
     save(journal,{'path':str(path),'main':str(main),'main_sha256':main_hash,'before':before,'after':after,'uid':stat.st_uid,'gid':stat.st_gid,'mode':stat.st_mode&0o777,'pid':pid})
-    if path.read_text()!=before or main.read_text()!=original_main:raise ValueError('压缩计划后配置变化，保留日志')
+    if path.read_text()!=before or main.read_text()!=original_main:raise ValueError('路由计划后配置变化，保留日志')
     atomic(path,after,stat.st_mode&0o777);os.chown(path,stat.st_uid,stat.st_gid);os.kill(pid,signal.SIGUSR1)
     return {'changed':True,'caddy_pid':pid,'pending_readback':True,'existing_services_restarted':False}
+
+
+def compression_upgrade(path=Path('/etc/caddy-sub/argosbx.caddy'),main=Path('/etc/caddy-sub/Caddyfile'),journal=COMPRESSION_JOURNAL):
+    return stage_import(compression_render, path, main, journal)
+
+
+def ad_render(text):
+    if text.count(AD_ROUTES) == 1 and text.count('/rules/ad/') == 1:
+        return text
+    if '/rules/ad/' in text or 'FLEET AD RULES' in text or text.count('# END EXTERNAL SEVEN SHARES') != 1:
+        raise ValueError('无法确认广告规则发布路由的作用域')
+    return text + '\n' + AD_ROUTES
+
+
+def stage_ads(snapshot):
+    import base64
+    from ad_rules import asset_name, validate
+    validate(snapshot)
+    if AD_JOURNAL.exists():
+        raise ValueError('广告路由有未完成事务')
+    name = asset_name(snapshot)
+    body = base64.b64decode(snapshot['mrs'], validate=True)
+    AD_ROOT.mkdir(mode=0o755, exist_ok=True)
+    path = AD_ROOT / name
+    if path.exists() and path.read_bytes() != body:
+        raise ValueError('同一版本的广告规则文件内容发生冲突')
+    if not path.exists():
+        atomic(path, body, 0o644)
+    result = stage_import(ad_render, Path('/etc/caddy-sub/argosbx.caddy'), Path('/etc/caddy-sub/Caddyfile'), AD_JOURNAL)
+    return {**result, 'asset': name, 'sha256': snapshot['mrs_sha256']}
 
 def compression_finish(restore=False,journal=COMPRESSION_JOURNAL):
     if not journal.exists():return {'pending':False}
@@ -100,10 +142,13 @@ def finish(restore=False):
 
 if __name__=='__main__':
     import argparse
+    import sys
     from storage import lock
-    parser=argparse.ArgumentParser();parser.add_argument('command',choices=['upgrade','finish','recover','compress','compression-finish','compression-recover']);command=parser.parse_args().command
+    parser=argparse.ArgumentParser();parser.add_argument('command',choices=['upgrade','finish','recover','compress','compression-finish','compression-recover','ads-stage','ads-finish','ads-recover']);command=parser.parse_args().command
     with lock('/etc/argosbx-fleet/agent.lock'):
         if command=='compress':result=compression_upgrade()
         elif command.startswith('compression-'):result=compression_finish(command=='compression-recover')
+        elif command=='ads-stage':result=stage_ads(json.load(sys.stdin))
+        elif command.startswith('ads-'):result=compression_finish(command=='ads-recover',AD_JOURNAL)
         else:result=upgrade() if command=='upgrade' else finish(command=='recover')
         print(json.dumps(result))

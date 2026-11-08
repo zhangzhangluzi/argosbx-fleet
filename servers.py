@@ -99,6 +99,8 @@ def prepare(config):
             after=copy.deepcopy(before or {}); after.update(candidate)
             items.append({'kind':kind,'name':candidate['name'],'before':before,'after':after})
     plan={'validation_version':VALIDATION_VERSION,'inventory_sha256':digest(config),'servers':len(config['servers']),'items':items}
+    if snapshot:
+        plan['ad_rules_sha256']=digest(snapshot)
     # Validate in isolated native Sub-Store objects before changing production.
     plan['rendered_sha256']=stage(config, payload)
     save(PLAN,plan)
@@ -293,6 +295,8 @@ def publish(config):
     if plan['inventory_sha256']!=digest(config):raise ValueError('资料已改变，请重新 plan')
     native_preflight(config)
     snapshot = ad_rules.load(config)
+    if plan.get('ad_rules_sha256') != (digest(snapshot) if snapshot else None):
+        raise ValueError('广告名单版本已改变，请重新 plan')
     if snapshot:
         ad_rules.verify_asset(config, snapshot)
     if any(get(config,x['kind'],x['name'])!=x['before'] for x in plan['items']):

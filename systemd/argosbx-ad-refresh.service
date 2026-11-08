@@ -1,0 +1,11 @@
+[Unit]
+Description=Refresh ArgoSBX subscription ad rules
+After=network-online.target sub-store.service caddy-sub.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 -B /opt/argosbx-fleet/current/ad_delivery.py refresh
+TimeoutStartSec=240
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true

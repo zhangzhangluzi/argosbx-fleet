@@ -21,6 +21,7 @@ BUSINESS_CONSOLES = [
     'ads.applovin.com', 'ads.tiktok.com',
     'max.applovin.com', 'dash.applovin.com',
     'developers.applovin.com', 'support.applovin.com',
+    'analytics.google.com',
 ]
 # Verified public console pages, their UI bundles and application bootstrap API.
 # Do not include platform-wide suffixes, telemetry or conversion endpoints.
@@ -50,6 +51,21 @@ TAILSCALE_CIDRS = ['100.64.0.0/10', 'fd7a:115c:a1e0::/48']
 MAGIC_DNS_RULE = 'IP-CIDR,100.100.100.100/32,DIRECT,no-resolve'
 
 
+def console_routes():
+    return {**dict.fromkeys(BUSINESS_CONSOLES, '日常线路'),
+            **dict.fromkeys(DOMESTIC_BUSINESS_HOSTS, 'DIRECT')}
+
+
+def console_rules(routes):
+    return [f'DOMAIN,{host},{route}' for host, route in routes.items()]
+
+
+def console_dns(client, routes):
+    return {host: [url + ('#' + route if client == 'clash' else '')
+                   for url in (REMOTE if route == '日常线路' else [LOCAL_DOH])]
+            for host, route in routes.items()}
+
+
 def guarded_rules(original, tailscale=None):
     guards = ['DST-PORT,53,REJECT', 'DST-PORT,853,日常线路']
     if tailscale:
@@ -61,8 +77,7 @@ def guarded_rules(original, tailscale=None):
     guards += ['DOMAIN-SUFFIX,'+d+',DIRECT' for d in REMOTE_CONTROL_DOMAINS]
     guards += ['DOMAIN-SUFFIX,'+d+',DIRECT' for d in FEISHU]
     guards += ['DOMAIN-SUFFIX,'+d+',日常线路' for d in DIAGNOSTIC_DOMAINS]
-    guards += ['DOMAIN,'+d+',日常线路' for d in BUSINESS_CONSOLES]
-    guards += ['DOMAIN,'+d+',DIRECT' for d in DOMESTIC_BUSINESS_HOSTS]
+    guards += console_rules(console_routes())
     guards += ['IP-CIDR,223.6.6.6/32,DIRECT,no-resolve']
     guards += ['DOMAIN,' + d + ',日常线路' for d in DNS_DOMAINS]
     guards += ['IP-CIDR,' + ip + '/32,日常线路,no-resolve' for ip in DNS_IPS]
@@ -97,7 +112,7 @@ def harden_config(original, client, hosts=None, tailscale=None):
         dns['proxy-server-nameserver-policy'] = {PUBLIC_NAME: [DNS+'#DIRECT']}
         dns.pop('direct-nameserver', None)
         dns.pop('direct-nameserver-follow-policy', None)
-        dns['nameserver-policy'] = {**{'+.'+d:[u+'#日常线路' for u in REMOTE] for d in ['googleapis.cn','xn--ngstr-lra8j.com']}, **{'+.'+d:[LOCAL_DOH+'#DIRECT'] for d in FEISHU}, **{d:[u+'#日常线路' for u in REMOTE] for d in BUSINESS_CONSOLES}, '+.cn':[LOCAL_DOH+'#DIRECT'], 'rule-set:国内域名':[LOCAL_DOH+'#DIRECT']}
+        dns['nameserver-policy'] = {**{'+.'+d:[u+'#日常线路' for u in REMOTE] for d in ['googleapis.cn','xn--ngstr-lra8j.com']}, **{'+.'+d:[LOCAL_DOH+'#DIRECT'] for d in FEISHU}, '+.cn':[LOCAL_DOH+'#DIRECT'], 'rule-set:国内域名':[LOCAL_DOH+'#DIRECT']}
         dns['nameserver-policy'].update({'+.'+d:[u+'#AI线路' for u in REMOTE] for d in AI_DOMAINS})
         dns['direct-nameserver']=[LOCAL_DOH+'#DIRECT']
         dns['direct-nameserver-follow-policy']=True
@@ -109,7 +124,7 @@ def harden_config(original, client, hosts=None, tailscale=None):
         assert client == 'stash'
         dns['nameserver'] = list(REMOTE)
         dns['proxy-server-nameserver'] = list(BOOTSTRAP)
-        dns['nameserver-policy'] = {**{'+.'+d:list(REMOTE) for d in ['googleapis.cn','xn--ngstr-lra8j.com']}, **{'+.'+d:[LOCAL_DOH] for d in FEISHU}, **{d:list(REMOTE) for d in BUSINESS_CONSOLES}, '+.cn':[LOCAL_DOH], 'rule-set:国内域名':[LOCAL_DOH]}
+        dns['nameserver-policy'] = {**{'+.'+d:list(REMOTE) for d in ['googleapis.cn','xn--ngstr-lra8j.com']}, **{'+.'+d:[LOCAL_DOH] for d in FEISHU}, '+.cn':[LOCAL_DOH], 'rule-set:国内域名':[LOCAL_DOH]}
         dns['nameserver-policy'].update({'+.'+d:list(STASH_AI_DNS) for d in AI_DOMAINS})
         config['rules'] = [r.replace(',日常线路', ',AI线路') if r in
             ('IP-CIDR,8.8.8.8/32,日常线路,no-resolve', 'IP-CIDR,8.8.4.4/32,日常线路,no-resolve') else r
@@ -117,8 +132,7 @@ def harden_config(original, client, hosts=None, tailscale=None):
         dns['follow-rule'] = True
     dns['nameserver-policy'].update({'+.'+d: [u + ('#日常线路' if client == 'clash' else '') for u in REMOTE]
                                     for d in DIAGNOSTIC_DOMAINS + OVERSEAS_DOMAINS})
-    dns['nameserver-policy'].update({d: [LOCAL_DOH + ('#DIRECT' if client == 'clash' else '')]
-                                    for d in DOMESTIC_BUSINESS_HOSTS})
+    dns['nameserver-policy'].update(console_dns(client, console_routes()))
     dns['nameserver-policy'].update({'+.'+d: [LOCAL_DOH + ('#DIRECT' if client == 'clash' else '')]
                                     for d in REMOTE_CONTROL_DOMAINS})
     if client == 'clash':

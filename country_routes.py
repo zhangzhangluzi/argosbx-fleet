@@ -66,12 +66,10 @@ def ad_render(text):
     return text + '\n' + AD_ROUTES
 
 
-def stage_ads(snapshot):
+def store_ad_asset(snapshot):
     import base64
     from ad_rules import asset_name, validate
     validate(snapshot)
-    if AD_JOURNAL.exists():
-        raise ValueError('广告路由有未完成事务')
     name = asset_name(snapshot)
     body = base64.b64decode(snapshot['mrs'], validate=True)
     AD_ROOT.mkdir(mode=0o755, exist_ok=True)
@@ -80,6 +78,13 @@ def stage_ads(snapshot):
         raise ValueError('同一版本的广告规则文件内容发生冲突')
     if not path.exists():
         atomic(path, body, 0o644)
+    return name
+
+
+def stage_ads(snapshot):
+    if AD_JOURNAL.exists():
+        raise ValueError('广告路由有未完成事务')
+    name = store_ad_asset(snapshot)
     result = stage_import(ad_render, Path('/etc/caddy-sub/argosbx.caddy'), Path('/etc/caddy-sub/Caddyfile'), AD_JOURNAL)
     return {**result, 'asset': name, 'sha256': snapshot['mrs_sha256']}
 

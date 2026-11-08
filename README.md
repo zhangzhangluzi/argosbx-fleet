@@ -101,6 +101,8 @@ python3 servers.py publish
 Clash/FlClash、Stash 使用 MetaCubeX `category-ads-all.mrs` 域名表，每 86400 秒更新。规则从上到下首次匹配：精确后台例外优先；命中广告表后交给“去广告”选择组，Clash 开启执行 REJECT，关闭执行 PASS，继续匹配后续应用和国内外规则。Stash 原订阅内同样提供“开启去广告／关闭去广告”分组，默认开启执行 REJECT；关闭后命中广告表的请求跟随日常线路，不再继续后面的国内外分流。这是两端明确的行为差异；Stash 不发出 PASS，也不需要单独安装覆写。其余请求和精确后台例外仍按原规则处理。例外和 DNS 策略由 `dns_policy.py` 一处生成，保持发布与导出一致。Shadowrocket 默认开启同源广告域名集：Sub-Store 将 `+.` 后缀转换为原生 `.` 格式，保留精确后台例外，避免引入更大、不同口径的广告表。
 
 可用 `python3 ad_rules.py <候选快照.json>` 从 GitHub 文件 API 获取同一提交的文本和 MRS，并用已安装的 Node 校验 MRS 类型和条目数。把候选通过标准输入交给订阅服务器的 `country_routes.py ads-stage`，核验版本化 MRS 下载后执行 `ads-finish`。在 `subscription.ad_rules_snapshot` 引用该快照后，原发布流程会校验实际 MRS 下载并生成同版本的 Shadowrocket 本地名单。失败时可继续使用已发布版本。服务器源的 `subscription.cache_key` 对应 Sub-Store 已预热的独立缓存，公网源恢复后可取回更新。
+
+现有原统一与七国聚合可使用 `ad_delivery.py` 一起维护。发布服务器通过权限为 0600 的 `/etc/argosbx-fleet/ad-publisher.json` 提供 `backend_url`、`external_ads_url` 和 `mihomo` 编译器路径。首次运行 `ad_delivery.py initialize` 从标准输入读取当前 `snapshot` 和 `console_routes`，成功后写入 Sub-Store 私有对象 `fleet-ad-state`。把维护清单的 `subscription.ad_rules_snapshot` 设为 `@sub-store`，手动生成就会使用这个版本。`ad_delivery.py verify` 验收已发布配置，`refresh` 每次检查上游内容，变化后用同一份域名表生成 MRS 和 Shadowrocket 名单。仓库中的 `argosbx-ad-refresh.timer` 每天北京时间 04:25 运行。发布失败会恢复原配置。
 2026-10-13 对常见投放后台的公开入口、重定向和界面资源核查后，增加以下精确 DIRECT 例外及国内 DoH，不放行平台父域名：
 - `e.qq.com`、`ad.qq.com`：腾讯营销入口、投放平台与同源资源。
 - `ad.e.kuaishou.com`、`ad-m.e.kuaishou.com`：磁力智投电脑和手机版后台。

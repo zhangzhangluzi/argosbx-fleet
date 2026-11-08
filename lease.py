@@ -15,11 +15,11 @@ def coordinator(config):
     if not ident:raise ValueError('必须配置 coordinator，防止跨机器并发发布')
     args=ssh_args(ident,config)
     args=args[:-1]+['-o','ServerAliveInterval=5','-o','ServerAliveCountMax=2',args[-1]]
-    proc=subprocess.Popen(args+["flock -n /run/argosbx-publisher.lock sh -c 'printf READY; cat >/dev/null'"],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL)
+    proc=subprocess.Popen(args+["flock -n /run/argosbx-publisher.lock sh -c 'test ! -e /etc/argosbx-fleet/ad-delivery-journal.json || exit 73; printf READY; cat >/dev/null'"],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL)
     token=None
     try:
         ready,_,_=select.select([proc.stdout],[],[],15)
-        if not ready or proc.stdout.read(5)!=b'READY':raise RuntimeError('发布协调锁不可用：已有发布或 SSH 不通')
+        if not ready or proc.stdout.read(5)!=b'READY':raise RuntimeError('发布协调锁不可用：已有发布、待恢复事务或 SSH 不通')
         token=_active.set(proc)
         ensure_owned()
         yield

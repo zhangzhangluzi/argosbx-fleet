@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import re
 import subprocess
+import tempfile
 from urllib.parse import urlsplit
 import urllib.request
 
@@ -18,6 +19,12 @@ MAX_BYTES = 1024 * 1024
 DOMAIN = r'[a-z0-9_-]+(?:\.[a-z0-9_-]+)+'
 MRS_MAGIC = bytes.fromhex('28b52ffd')
 REF = r'[0-9a-f]{40}'
+MANAGED_SNAPSHOT = '@sub-store'
+STATE_FILE = 'fleet-ad-state'
+# Exact ad-delivery and SDK hosts selected from AWAvenue Only.Ads v1.7.8.
+EXTRA_ADS = ('ads-video-al.xhscdn.com', 'ads-video-qc.xhscdn.com', 'adsdk.vivo.com.cn')
+BLOCK_SAMPLES = ('ms.applovin.com', 'googleads.g.doubleclick.net', 'www.google-analytics.com', *EXTRA_ADS)
+AD_RULE = 'RULE-SET,广告域名,去广告'
 
 
 def sha(data):
@@ -47,14 +54,16 @@ def convert(text):
     return '\n'.join(dict.fromkeys(entries)) + '\n'
 
 
-def fetch(node='node'):
+def upstream_domains():
     revision = json.loads(get(REPOSITORY + '/commits/meta', 'application/vnd.github+json'))['sha']
     if not re.fullmatch(REF, revision):
         raise ValueError('上游版本标识无效')
-    suffix = '?ref=' + revision
-    media = 'application/vnd.github.raw+json'
-    domains = convert(get(FILE + '.list' + suffix, media).decode('utf-8'))
-    mrs = get(FILE + '.mrs' + suffix, media)
+    return revision, convert(get(FILE + '.list?ref=' + revision, 'application/vnd.github.raw+json').decode('utf-8'))
+
+
+def fetch(node='node'):
+    revision, domains = upstream_domains()
+    mrs = get(FILE + '.mrs?ref=' + revision, 'application/vnd.github.raw+json')
     # Node is already used by the subscription publisher. Bound decompression
     # and check the documented MRS v1 header and domain record count.
     inspect = '''
@@ -68,9 +77,44 @@ process.stdout.write(String(body.readBigInt64BE(5)));
     count = len(domains.splitlines())
     if result.returncode or result.stdout != str(count).encode():
         raise ValueError('MRS 类型或条目数与域名名单不一致')
-    return {'revision': revision, 'domains': domains, 'domain_count': count,
-            'domains_sha256': sha(domains.encode()), 'mrs_sha256': sha(mrs),
-            'mrs': base64.b64encode(mrs).decode()}
+    return snapshot(revision, domains, mrs)
+
+
+def snapshot(revision, domains, mrs):
+    return validate({'revision': revision, 'domains': domains, 'domain_count': len(domains.splitlines()),
+                     'domains_sha256': sha(domains.encode()), 'mrs_sha256': sha(mrs),
+                     'mrs': base64.b64encode(mrs).decode()})
+
+
+def matches(host, entries):
+    labels = host.split('.')
+    return host in entries or any('.' + '.'.join(labels[i:]) in entries for i in range(len(labels)-1))
+
+
+def compile_snapshot(revision, domains, mihomo):
+    # Convert the same normalized exact and suffix rules exported to Shadowrocket.
+    with tempfile.TemporaryDirectory(prefix='argosbx-ad-') as directory:
+        source = Path(directory)/'domains.txt'
+        target = source.with_suffix('.mrs')
+        source.write_text(''.join(('+' if row.startswith('.') else '') + row + '\n'
+                                  for row in domains.splitlines()))
+        subprocess.run([str(mihomo), 'convert-ruleset', 'domain', 'text', str(source), str(target)],
+                       check=True, capture_output=True, timeout=30)
+        return snapshot(revision, domains, target.read_bytes())
+
+
+def refresh(previous, mihomo):
+    revision, text = upstream_domains()
+    entries = set(text.splitlines())
+    entries.update(host for host in EXTRA_ADS if not matches(host, entries))
+    if not all(matches(host, entries) for host in BLOCK_SAMPLES):
+        raise ValueError('广告名单缺少关键拦截样本，保留当前版本')
+    old = set(previous['domains'].splitlines())
+    if entries == old:
+        return previous
+    if len(entries ^ old) > max(20, len(old) // 5):
+        raise ValueError('广告名单变动超过验收范围，保留当前版本')
+    return compile_snapshot(revision, '\n'.join(sorted(entries)) + '\n', mihomo)
 
 
 def validate(snapshot):
@@ -91,6 +135,13 @@ def validate(snapshot):
 
 def load(config):
     path = config['subscription'].get('ad_rules_snapshot')
+    if path == MANAGED_SNAPSHOT:
+        from dns_policy import console_routes
+        url = config['subscription']['backend_url'].rstrip('/') + '/api/file/' + STATE_FILE
+        state = json.loads(get(url, 'application/json'))
+        if state['console_routes'] != console_routes():
+            raise ValueError('广告例外与订阅服务器版本不同，请先同步维护代码')
+        return validate(state['snapshot'])
     if path:
         from fleet import resolve_path
         return validate(json.loads(resolve_path(path).read_text()))
@@ -123,17 +174,35 @@ def file_object(name, title, snapshot):
             'content': snapshot['domains'], 'process': []}
 
 
+def first_domain_target(rules, host):
+    for rule in rules:
+        kind, _, tail = rule.partition(',')
+        value, _, target = tail.partition(',')
+        if ((kind == 'DOMAIN' and value == host)
+                or (kind == 'DOMAIN-SUFFIX' and (host == value or host.endswith('.' + value)))
+                or (kind == 'DOMAIN-KEYWORD' and value in host)):
+            return target
+    return None
+
+
+def check_exceptions(rules, ad):
+    from dns_policy import console_routes
+    for host, route in console_routes().items():
+        if f'DOMAIN,{host},{route}' not in rules[:ad] or first_domain_target(rules[:ad], host) != route:
+            raise ValueError('投放后台例外缺失或被前置规则覆盖：' + host)
+
+
 def check_profile(value, client):
-    from dns_policy import BUSINESS_CONSOLES, DOMESTIC_BUSINESS_HOSTS
+    from dns_policy import console_dns, console_routes
     provider = value['rule-providers']['广告域名']
     if (provider.get('behavior'), provider.get('format')) != ('domain', 'mrs'):
         raise ValueError('广告规则集格式不符')
     rules = value['rules']
-    ad = rules.index('RULE-SET,广告域名,去广告')
+    ad = rules.index(AD_RULE)
+    check_exceptions(rules, ad)
     policy = value['dns']['nameserver-policy']
-    for hosts, target in ((BUSINESS_CONSOLES, '日常线路'), (DOMESTIC_BUSINESS_HOSTS, 'DIRECT')):
-        if any('DOMAIN,' + host + ',' + target not in rules[:ad] or host not in policy for host in hosts):
-            raise ValueError('投放后台例外或 DNS 策略缺失')
+    if any(policy.get(host) != dns for host, dns in console_dns(client, console_routes()).items()):
+        raise ValueError('投放后台 DNS 策略不匹配')
     groups = {group['name']: group['proxies'] for group in value['proxy-groups']}
     if (groups.get('去广告') != ['开启去广告', '关闭去广告']
             or groups.get('开启去广告') != ['REJECT']
@@ -142,12 +211,9 @@ def check_profile(value, client):
 
 
 def check_shadowrocket(config, domains, ads_url):
-    from dns_policy import BUSINESS_CONSOLES, DOMESTIC_BUSINESS_HOSTS
     rules = config.split('[Rule]', 1)[1].split('\n[', 1)[0].splitlines()
     ad = rules.index('DOMAIN-SET,' + ads_url + ',REJECT')
-    for hosts, target in ((BUSINESS_CONSOLES, '日常线路'), (DOMESTIC_BUSINESS_HOSTS, 'DIRECT')):
-        if any('DOMAIN,' + host + ',' + target not in rules[:ad] for host in hosts):
-            raise ValueError('Shadowrocket 投放后台例外缺失或顺序错误')
+    check_exceptions(rules, ad)
     entries = set(domains.splitlines())
     if '.doubleclick.net' not in entries or '.applovin.com' not in entries:
         raise ValueError('广告名单缺少关键拦截样本，需重新核对上游内容')

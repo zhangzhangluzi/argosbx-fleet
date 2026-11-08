@@ -15,11 +15,11 @@ REMOTE = ['https://1.1.1.1/dns-query', 'https://1.0.0.1/dns-query']
 STASH_AI_DNS = ['https://8.8.8.8/dns-query', 'https://8.8.4.4/dns-query']
 # Only stable, self-owned origin addresses are pinned; CDN ingress remains dynamic.
 FEISHU = ['feishu.cn','feishucdn.com']
-# These are advertiser consoles, not ad-delivery endpoints for this profile.
-# Keep the allowlist exact so unrelated SDK and tracking hosts remain blockable.
+# Exact login, console, and report hosts. SDK and tracking hosts have separate rules.
 BUSINESS_CONSOLES = [
     'ads.applovin.com', 'ads.tiktok.com',
     'max.applovin.com', 'dash.applovin.com',
+    'r.applovin.com',  # MAX revenue and Axon campaign reporting.
     'developers.applovin.com', 'support.applovin.com',
     'analytics.google.com',
 ]

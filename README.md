@@ -41,6 +41,9 @@ python3 servers.py publish
 Sub-Store 的 `/download/collection/all` 和单服务器导出会按客户端返回完整配置：FlClash 使用 Clash 模板，Stash 使用独立 Stash 模板，包含分组、分流、DNS 与去广告。可以用 `target=Stash` 明确指定格式，URL 路径中的目标优先于查询参数和 User-Agent。Stash 请求会根据版本决定是否包含 XHTTP／VLESS Encryption（iOS/tvOS ≥ 3.6、macOS ≥ 4.3）；旧版或无法识别版本时，使用不含这类节点的 3.4 兼容集合，其余节点及规则保留，国家组随实际节点重建。服务端不会移除协议入口，也不会改写加密凭据。版本依据为 [Stash 官方协议说明](https://stash.wiki/proxy-protocols/proxy-types#xhttp)。`/api/file/stash` 使用同一版本兼容逻辑，无需更换原地址；直接文件请求及通用下载均按原始客户端 User-Agent 生成配置。旧版或无法识别版本时过滤 XHTTP／VLESS Encryption，支持的版本保留完整字段。分组在过滤后重建，文件响应设置 YAML 类型、`Vary: User-Agent` 和 `Cache-Control: private, no-store`，避免不同版本混用缓存。
 
 发布前后同时校验文件地址和通用下载地址，覆盖 iOS、macOS、新旧版本与无版本请求，检查 Stash 兼容集合、现代 Stash 全节点配置及 FlClash 输出。不能用 Mihomo 解析成功代替 iPhone Stash 真机验收。
+
+Stash 的完整聚合配置首行包含 `#SUBSCRIBED`，统一订阅与七国合集各自使用原链接。按单国或单机导出时不会引用聚合更新地址。已导入的配置先刷新一次，之后按客户端设置定时更新，默认 12 小时。[Stash 服务提供商订阅](https://stash.wiki/features/service-provider-subscription)
+接管现有两份 Stash 模板时，在 Sub-Store 发布机执行 `python3 -B /opt/argosbx-fleet/current/stash_refresh.py`。从标准输入传入私有 JSON，`stash` 和 `external-seven-stash` 分别对应现有统一订阅与七国分享 URL。脚本使用现有发布锁，先校验临时模板，再通过原地址回读，失败时恢复本次改动。
 进程或网络中断后运行 `servers.py recover`，按线上内容恢复本次写入并清理临时对象。恢复前先核对所有待恢复对象，遇到第三方修改保留日志并拒绝开始覆盖。临时对象按资源清单核对存在性，已删除、未创建或删除响应丢失均可重复恢复，清理进度逐项落盘。日志0600、原子替换并 fsync；成功后删除，不长期累计备份。不要绕过工具在发布期间编辑同一 Sub-Store 对象。
 服务器端未完成的协议事务由 `fleetctl.py protocol-recover --server jp` 恢复；已尝试重启过的服务在恢复时也会重启，未重启过的事务不会触发服务重启。恢复命令也默认拒绝重启，只有明确指定 `--allow-restart` 才会恢复已重启的服务；恢复前统一核对原生文件、登记状态和订阅源，存在外部修改时整次停止。恢复同时还原源文件和读取权限，清除过期计划；未恢复事务会阻止定时导出和发布。
 ## 域名迁移

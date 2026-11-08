@@ -2,7 +2,7 @@ import contextlib,io,json,runpy,subprocess,sys,unittest
 from pathlib import Path
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
-import fleet,servers
+import fleet,servers,stash_refresh
 
 ROOT=Path(__file__).resolve().parents[1]
 
@@ -19,7 +19,7 @@ class StashDownloadTests(unittest.TestCase):
     def render(self,request,nodes=None,files=None):
         op=self.payload['collections'][0]['process'][0]['args']
         script='''
-const ProxyUtils={yaml:{safeLoad:JSON.parse,safeDump:JSON.stringify},
+const ProxyUtils={yaml:{safeLoad:body=>JSON.parse(body.replace(/^#SUBSCRIBED [^\\n]*\\n/,'')),safeDump:JSON.stringify},
  parse:body=>JSON.parse(body).proxies,
  produce:(nodes,target)=>nodes.map(n=>{n=structuredClone(n);if(target==='Stash'&&n.type==='hysteria2'){n.auth=n.password;delete n.password;}return n;})};
 const $substore={read:()=>FILES};
@@ -118,8 +118,9 @@ SCRIPT
         self.assertIn('error',self.render(request,files=[]))
         self.assertIn('error',self.render(request,nodes=[self.nodes[1]]))
 
-    def render_file(self,request,nodes=None):
-        op=next(f for f in self.payload['files'] if f['name']=='stash')['process'][0]['args']['content']
+    def render_file(self,request,nodes=None,op=None):
+        if op is None:
+            op=next(f for f in self.payload['files'] if f['name']=='stash')['process'][0]['args']['content']
         script='''
 const ProxyUtils={yaml:{safeLoad:JSON.parse,safeDump:JSON.stringify},
  parse:body=>JSON.parse(body).proxies,
@@ -143,6 +144,43 @@ try {const input={$content:JSON.stringify({proxies:NODES}),$options:{_req:REQUES
                 self.assertEqual(headers['vary'],'Origin, User-Agent')
                 self.assertEqual(headers['content-type'],'text/yaml; charset=utf-8')
                 self.assertNotIn('Content-Length',headers)
+
+    def test_refresh_metadata_is_only_added_to_the_full_aggregate(self):
+        url='https://sub.example.com/s/PRIVATE_TOKEN?format=stash'
+        req={'query':{'target':'Stash'},'headers':{'User-Agent':'Mozilla/5.0'}}
+        raw_file=self.render_file({**req,'path':'/api/file/stash'})['$content']
+        raw_download=self.render({**req,'path':'/download/collection/all'})['result']['body']
+        for raw in (raw_file,raw_download):
+            stash_refresh.check(raw,url)
+            self.assertEqual(len(json.loads(raw.split('\n',1)[1])['proxies']),1)
+        for path in ('/download/collection/shadowrocket-jp','/download/argo-jp','/api/file/stash-copy'):
+            with self.subTest(path=path):
+                stash_refresh.check(self.render({**req,'path':path})['result']['body'])
+        raw_clash=self.render({'path':'/download/collection/all','query':{'target':'ClashMeta'}})['result']['body']
+        stash_refresh.check(raw_clash)
+
+    def test_seven_region_refresh_uses_its_own_link_and_preserves_yaml(self):
+        native=next(f for f in self.payload['files'] if f['name']=='stash')['process'][0]['args']['content']
+        url='https://sub.example.com/share/col/external-seven?token=share-token&platform=ClashMeta'
+        script=stash_refresh.template(native,'external-seven-stash',url)
+        self.assertNotIn('PRIVATE_TOKEN',script)
+        self.assertEqual(stash_refresh.template(script,'external-seven-stash',url),script)
+        req={'headers':{'User-Agent':'Stash/3.6.0'}}
+        raw=self.render_file({**req,'path':'/share/col/external-seven'},op=script)['$content']
+        stash_refresh.check(raw,'https://sub.example.com/share/col/external-seven?token=share-token&target=Stash')
+        self.assertEqual(raw.split('\n',1)[1],self.render_file(req)['$content'])
+        for path in ('/share/col/external-seven-copy','/download/collection/all','/api/file/stash'):
+            stash_refresh.check(self.render_file({**req,'path':path},op=script)['$content'])
+
+    def test_refresh_url_and_first_line_are_validated(self):
+        for url in ('https://user@sub.example.com/path','https://sub.example.com/path\n',
+                    'http://sub.example.com/path','https://sub.example.com/path#override'):
+            with self.subTest(url=url),self.assertRaises(ValueError):
+                stash_refresh.update_url('stash',url)
+        with self.assertRaises(ValueError):
+            stash_refresh.update_url('external-seven-stash','https://sub.example.com/share/col/external-seven')
+        with self.assertRaises(ValueError):
+            stash_refresh.check('mode: rule\n#SUBSCRIBED https://sub.example.com', 'https://sub.example.com')
 
     def test_file_identity_cannot_be_overridden_to_skip_compatibility(self):
         output=self.render_file({'query':{'target':'ClashMeta'},'headers':{'user-agent':'FlClash/1'}})

@@ -6,6 +6,7 @@ from storage import save
 from protocols import LABELS, IDS, node_label, protocol_type, families as node_families
 from dns_policy import harden_config, harden_shadowrocket
 import ad_rules
+import stash_refresh
 root=pathlib.Path(__file__).parent
 stash_compat=(root/'stash-compat.js').read_text()
 inventory=active_config(globals().get('inventory_override') or read())
@@ -69,6 +70,7 @@ for fmt in ('clash','stash'):
         # tests select groups every 600 seconds, ignoring the configured cadence.
         script=script.replace("for(const g of config['proxy-groups'])if(!g.proxies.length)", "for(const g of config['proxy-groups'])if(g.type==='select')g.interval=-1;\n for(const g of config['proxy-groups'])if(!g.proxies.length)")
         script=stash_compat+'\n'+script.replace('const proxies=', 'const converted=',1).replace(' const config=',' const proxies=stashCompatibleProxies(converted,input.$options?._req);\n input.$options ??= {};\n input.$options._res ??= {};\n input.$options._res.headers=stashResponseHeaders(input.$options._res.headers);\n const config=',1)
+        script=stash_refresh.template(script, fmt, inventory['subscription']['public_url'])
     files.append({'name':fmt,'displayName':'ArgoSBX · '+fmt,'type':'mihomoConfig','sourceType':'collection','sourceName':'all','process':[{'type':'Script Operator','args':{'mode':'script','content':script}}]})
 # Shadowrocket configuration keeps the accepted DNS, Play and Telegram rules.
 sr=harden_shadowrocket((root/'templates'/'base-shadowrocket.conf').read_text(),hosts=node_hosts,tailscale=inventory.get('tailscale'),ads_url=inventory['subscription']['backend_url'].rstrip('/')+'/api/file/shadowrocket-ads')

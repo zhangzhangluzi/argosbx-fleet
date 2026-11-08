@@ -17,13 +17,14 @@ from fleet import WORKSPACE, STATE, read, active_config
 
 WORK = Path(__file__).resolve().parent
 PLAN = STATE/'server-plan.json'
-VALIDATION_VERSION = 3
+VALIDATION_VERSION = 4
 
 
 from storage import save, lock
 from lease import ensure_owned
 import publication
 import ad_rules
+import stash_refresh
 JOURNAL=STATE/'publication-journal.json'
 STAGING=STATE/'staging-journal.json'
 
@@ -136,6 +137,9 @@ def stage(config, payload):
         for source in payload['files']:
             if source['name']=='shadowrocket-config': continue
             f=copy.deepcopy(source);f['name']=prefix+'-'+source['name'];f['sourceName']=prefix
+            if source['name']=='stash':
+                args=f['process'][0]['args']
+                args['content']=stash_refresh.template(args['content'], 'stash', config['subscription']['public_url'], staged_name=f['name'])
             creating('file',f['name']);request(config,'/api/files',f,'POST')
             if source['name']=='shadowrocket-ads':
                 raw=request(config,'/api/file/'+f['name'],raw=True)
@@ -143,7 +147,8 @@ def stage(config, payload):
                 ad_domains = raw
                 rendered[source['name']]=digest(raw)
                 continue
-            value=yaml.safe_load(request(config,'/api/file/'+f['name'],raw=True,**({'user_agent':'Stash/3.6.0'} if source['name']=='stash' else {})))
+            raw=stash_file(config,f['name'],'Stash/3.6.0') if source['name']=='stash' else request(config,'/api/file/'+f['name'],raw=True)
+            value=yaml.safe_load(raw)
             check_profile(value)
             if has_ads:
                 ad_rules.check_profile(value, source['name'])
@@ -172,7 +177,9 @@ def stage(config, payload):
                 if op['type']=='Response Transformer':op['args']['arguments'].update(profile=prefix+'-clash',stash_profile=prefix+'-stash')
             request(config,'/api/collection/'+prefix,col,'PATCH')
             for key,(target,ua) in DOWNLOAD_CASES.items():
-                value=yaml.safe_load(request(config,'/download/collection/'+prefix+'?target='+target,raw=True,user_agent=ua))
+                raw=request(config,'/download/collection/'+prefix+'?target='+target,raw=True,user_agent=ua)
+                stash_refresh.check(raw)
+                value=yaml.safe_load(raw)
                 check_profile(value)
                 full=json.loads((STATE/('validated-'+('stash' if target=='Stash' else 'clash')+'.json')).read_text())
                 expected=stash_expected_profile(full,key!='download-stash') if target=='Stash' else full
@@ -186,7 +193,9 @@ def stage(config, payload):
             creating('collection',col['name']);request(config,'/api/collections',col,'POST')
             prefixes=[s['name'] for s in active_config(config)['servers'] if s['subscription']['name'] in country['subscriptions']]
             for key,(target,ua) in DOWNLOAD_CASES.items():
-                value=yaml.safe_load(request(config,'/download/collection/'+col['name']+'?target='+target,raw=True,user_agent=ua))
+                raw=request(config,'/download/collection/'+col['name']+'?target='+target,raw=True,user_agent=ua)
+                stash_refresh.check(raw)
+                value=yaml.safe_load(raw)
                 full=json.loads((STATE/('validated-'+('stash' if target=='Stash' else 'clash')+'.json')).read_text())
                 expected=stash_expected_profile(full,key!='download-stash') if target=='Stash' else full
                 expected=subset_profile(expected,[n for n in expected['proxies'] if any(n['name'].startswith(p+'-T-') or n['name'].startswith(p+'-U-') for p in prefixes)])
@@ -212,11 +221,17 @@ STASH_FILE_CASES={
     'file-stash-versionless':'Stash',
 }
 
+def stash_file(config,name,user_agent):
+    raw=request(config,'/api/file/'+name,raw=True,user_agent=user_agent)
+    stash_refresh.check(raw,stash_refresh.update_url('stash',config['subscription']['public_url']))
+    return raw
+
+
 def check_stash_file_cases(config,name,full):
     import yaml
     rendered={}
     for key,ua in STASH_FILE_CASES.items():
-        value=yaml.safe_load(request(config,'/api/file/'+name,raw=True,user_agent=ua))
+        value=yaml.safe_load(stash_file(config,name,ua))
         expected=stash_expected_profile(full,key=='file-stash-mac-modern')
         check_equivalent_profile(value,expected,key)
         rendered[key]=digest(value)
@@ -312,7 +327,8 @@ def publish(config):
             if get(config,item['kind'],item['name'])!=item['after']:raise ValueError('发布回读不一致')
         import yaml
         for fmt in ['clash','stash']:
-            value=yaml.safe_load(request(config,'/api/file/'+fmt,raw=True,**({'user_agent':'Stash/3.6.0'} if fmt=='stash' else {})))
+            raw=stash_file(config,fmt,'Stash/3.6.0') if fmt=='stash' else request(config,'/api/file/'+fmt,raw=True)
+            value=yaml.safe_load(raw)
             check_profile(value)
             ad_rules.check_profile(value, fmt)
             if digest(value)!=plan['rendered_sha256'][fmt]:raise ValueError('线上输出与已校验计划不符')
@@ -326,13 +342,18 @@ def publish(config):
             if digest(raw)!=plan['rendered_sha256']['shadowrocket-ads']:raise ValueError('广告域名集已更新，请重新 plan')
         for key,(target,ua) in DOWNLOAD_CASES.items():
             if key not in plan['rendered_sha256']:continue
-            value=yaml.safe_load(request(config,'/download/collection/all?target='+target,raw=True,user_agent=ua))
+            raw=request(config,'/download/collection/all?target='+target,raw=True,user_agent=ua)
+            refresh=stash_refresh.update_url('stash',config['subscription']['public_url']) if target=='Stash' else None
+            stash_refresh.check(raw,refresh)
+            value=yaml.safe_load(raw)
             check_profile(value)
             if digest(value)!=plan['rendered_sha256'][key]:raise ValueError('客户端导出与已校验计划不符：'+key)
         for key,wanted in plan['rendered_sha256'].items():
             if not key.startswith('country-profile:'):continue
             _,name,case=key.split(':');target,ua=DOWNLOAD_CASES[case]
-            value=yaml.safe_load(request(config,'/download/collection/'+name+'?target='+target,raw=True,user_agent=ua))
+            raw=request(config,'/download/collection/'+name+'?target='+target,raw=True,user_agent=ua)
+            stash_refresh.check(raw)
+            value=yaml.safe_load(raw)
             check_profile(value)
             if digest(value)!=wanted:raise ValueError('国家完整配置与已校验计划不符：'+name+'/'+case)
         for name,wanted in plan['rendered_sha256'].items():
@@ -344,6 +365,11 @@ def publish(config):
         with urllib.request.urlopen(req,timeout=45) as r:value=yaml.safe_load(r.read())
         if value!=yaml.safe_load(request(config,'/api/file/clash',raw=True)):
             raise ValueError('原统一订阅回读不一致')
+        stash_url=stash_refresh.update_url('stash',public)
+        req=urllib.request.Request(stash_url,headers={'User-Agent':'Mozilla/5.0'})
+        with urllib.request.urlopen(req,timeout=45) as r:raw=r.read().decode()
+        stash_refresh.check(raw,stash_url)
+        check_equivalent_profile(yaml.safe_load(raw),yaml.safe_load(stash_file(config,'stash','Mozilla/5.0')),'原统一 Stash 订阅')
     except Exception:
         publication.recover(JOURNAL,config,get,request,digest)
         raise

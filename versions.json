@@ -1,11 +1,11 @@
 {
-  "version": "v1.2.29",
+  "version": "v1.2.30",
   "python_min": "3.10",
   "dependencies": [
     "PyYAML"
   ],
   "validated_stable": {
-    "xray": "26.10.29",
+    "xray": "26.10.31",
     "sing-box": "1.14.4",
     "cloudflared": "2026.10.7",
     "sub-store": "2.44.2",

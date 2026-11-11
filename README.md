@@ -20,8 +20,8 @@ flowchart LR
 从 GitHub Release 下载版本包和 SHA256SUMS，先校验再安装。[下载维护包](https://github.com/zhangzhangluzi/argosbx-fleet/releases/latest)
 ```sh
 sha256sum -c SHA256SUMS &&
-  tar -xzf argosbx-fleet-v1.2.31.tar.gz install.py &&
-  python3 install.py argosbx-fleet-v1.2.31.tar.gz --sha256 "$(cut -d ' ' -f1 SHA256SUMS)"
+  tar -xzf argosbx-fleet-v1.2.32.tar.gz install.py &&
+  python3 install.py argosbx-fleet-v1.2.32.tar.gz --sha256 "$(cut -d ' ' -f1 SHA256SUMS)"
 ```
 安装到 `/opt/argosbx-fleet/<版本>`，原子更新 `current` 符号链接。同一版本内容不可覆盖。升级使用相同命令；数据与凭据不在发布包内。
 ## 配置入口
@@ -84,7 +84,7 @@ python3 onboard.py add --config /private/servers.json --server jp2 --country JP 
 python3 onboard.py install --config /private/servers.json --server jp2
 ```
 `add` 生成完整可编辑的默认值、独立域名及随机私密源路径，状态为 `pending`，不会参与现有服务器发布。`install` 串联主机检查、校验固定版本二进制、创建固定隧道、DNS、Caddy ACME 证书、两个代理内核、导出定时器、外部 HTTPS 源验收、独立客户端逐协议 HTTPS/出口 IP/UDP 验收，再登记 Sub-Store 源、更新原订阅并转为 `active`。验收使用其他已启用服务器的临时回环客户端；IPv6 需有另一台具备 IPv6 的验收端，条件不足或任一检查失败均保持 `pending`。已有统一地址不变。不得把现有 VPS 当成空白机；检测到已有安装即拒绝覆盖。安装中断后用原配置重复同一命令续装，保留第一次生成的节点凭据。
-v1.2.31 新机初始化固定使用 Xray 26.11.9 和 Caddy 2.11.9，并校验 amd64 和 arm64 的官方发布包。维护包安装不会升级现有代理内核。[Xray 发布说明](https://github.com/XTLS/Xray-core/releases/tag/v26.11.9)
+v1.2.32 新机初始化固定使用 Xray 26.11.9 和 Caddy 2.11.9，并校验 amd64 和 arm64 的官方发布包。维护包安装不会升级现有代理内核。[Xray 发布说明](https://github.com/XTLS/Xray-core/releases/tag/v26.11.9)
 证书通过 Caddy 自动续期，协议使用稳定文件引用。云防火墙需要提前放行 TCP 80/443/8443/2447/2448 和 UDP 2446/8443（若调整端口，以初始化检查输出为准）；主机 UFW 已启用时仅追加这些端口，不清空规则。服务商防火墙没有通用 API，安装器不会冒充已自动放行。独立验收证明服务器之间可达，用户所在地的运营商路径仍可能不同。CF 创建失败保留私有接入日志，未知响应通过同一随机隧道名称回读，避免重复创建。
 
 ## 多入站模型

@@ -1,14 +1,15 @@
 {
-  "version": "v1.2.30",
+  "version": "v1.2.31",
   "python_min": "3.10",
   "dependencies": [
     "PyYAML"
   ],
   "validated_stable": {
-    "xray": "26.10.31",
+    "xray": "26.11.9",
     "sing-box": "1.14.4",
     "cloudflared": "2026.10.7",
-    "sub-store": "2.44.2",
+    "sub-store": "2.44.7",
+    "caddy": "2.11.9",
     "node": "24.22.2"
   },
   "updates_proxy_binaries": false

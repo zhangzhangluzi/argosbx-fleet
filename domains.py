@@ -28,7 +28,7 @@ class Cloudflare:
         if settings.get('management_server') is not None:
             from cf_transport import SSHTransport
             transport=SSHTransport(config,settings['management_server'])
-        return cls(resolve_path(settings['token_file']),transport)
+        return cls(resolve_path(settings['token_file'],config),transport)
     def close(self):
         if self.transport:self.transport.close()
     def transport_info(self):

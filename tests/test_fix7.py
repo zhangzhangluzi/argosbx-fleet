@@ -134,3 +134,11 @@ class CountryRouteTests(unittest.TestCase):
   self.assertEqual(country_routes.render(value),value)
  def test_unknown_layout_refuses(self):
   with self.assertRaises(ValueError):country_routes.render('not managed')
+ def test_retired_country_route_is_scoped_idempotent_and_reversible(self):
+  original=country_routes.render(self.fixture())
+  changed=country_routes.retired_render(original,['TW'])
+  self.assertIn('^shadowrocket-(tw)$',changed)
+  self.assertIn('respond "Subscription retired" 410',changed)
+  self.assertEqual(country_routes.retired_render(changed,['TW']),changed)
+  self.assertEqual(country_routes.retired_render(changed,[]),original)
+  with self.assertRaises(ValueError):country_routes.retired_render(original,['TW|US'])

@@ -55,6 +55,20 @@ class InventoryTests(unittest.TestCase):
             with self.assertRaises(ValueError):fleet.read(path)
             path.chmod(0o600);self.assertEqual(fleet.read(path),self.config)
 
+    def test_conventional_inventory_resolves_relative_ssh_paths_from_its_workspace(self):
+        with tempfile.TemporaryDirectory() as tmp,patch.dict('os.environ',{},clear=True):
+            root=Path(tmp);folder=root/'.vpn-deploy';folder.mkdir()
+            path=folder/'servers.json';config=copy.deepcopy(self.config)
+            config['servers'][0]['ssh']['known_hosts']='.vpn-deploy/known-hosts'
+            config['servers'][0]['ssh']['identity_file']='.vpn-deploy/identity'
+            path.write_text(json.dumps(config));path.chmod(0o600)
+            with patch.object(fleet,'WORKSPACE',root/'another-directory'):
+                loaded=fleet.read(path)
+                args=fleet.ssh_args('jp',loaded)
+                self.assertIn('UserKnownHostsFile='+str(folder.resolve()/'known-hosts'),args)
+                self.assertIn(str(folder.resolve()/'identity'),args)
+                self.assertEqual(json.loads(json.dumps(loaded)),config)
+
     def test_changed_destination_cannot_reuse_old_ssh_master(self):
         with tempfile.TemporaryDirectory() as tmp,patch.object(fleet,'WORKSPACE',Path(tmp)):
             p=Path(tmp)/'.vpn-deploy';p.mkdir()

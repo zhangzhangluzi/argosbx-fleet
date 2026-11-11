@@ -144,7 +144,7 @@ def load(config):
         return validate(state['snapshot'])
     if path:
         from fleet import resolve_path
-        return validate(json.loads(resolve_path(path).read_text()))
+        return validate(json.loads(resolve_path(path,config).read_text()))
     return None
 
 

@@ -223,7 +223,7 @@ def negative_source(config):
     relay=config['cloudflare']['management_server'];peers=[s for s in config['servers'] if s['id']!=relay and s.get('status','active')=='active' and s.get('ipv4')]
     rows=[]
     for peer in peers:
-        cf=Cloudflare(resolve_path(config['cloudflare']['token_file']),SSHTransport(config,peer['id']))
+        cf=Cloudflare(resolve_path(config['cloudflare']['token_file'],config),SSHTransport(config,peer['id']))
         try:
             try:cf.zones()
             except CloudflareAPIError as error:
@@ -283,7 +283,7 @@ def run(config,targets,remote,verify_writes=False):
             hosts=before.get('caddy',{}).get('hosts',[])
             row['certificates']=_checked(lambda:certificates.run(config,server,remote,observer=observer,http_hosts=hosts))
             row['http01_ingress']=_checked(lambda:http_ingress(probe_config,server,hosts))
-            row['cloudflare_policy']=_checked(lambda:cf_audit.audit(cf,server,resolve_path(config['cloudflare']['policy_snapshot']) if config['cloudflare'].get('policy_snapshot') else None)) if positive['passed'] else {'read_access_passed':False}
+            row['cloudflare_policy']=_checked(lambda:cf_audit.audit(cf,server,resolve_path(config['cloudflare']['policy_snapshot'],config) if config['cloudflare'].get('policy_snapshot') else None)) if positive['passed'] else {'read_access_passed':False}
             row['references']=_checked(lambda:references(cf,server,hosts)) if positive['passed'] else {'passed':False}
             def traffic():
                 scoped=copy.deepcopy(server);scoped['protocols']={i:p for i,p in server['protocols'].items() if p['enabled'] and protocol_type(i,p) in ('cf','xhttp')}

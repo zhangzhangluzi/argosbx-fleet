@@ -26,8 +26,8 @@ def main():
         if a.allow_restart or a.observer or a.recover_writes:raise ValueError('依赖验收不接受重启、observer 或恢复参数；恢复写测试请用 cf-audit --recover-writes')
         if a.output:
             protected={Path(a.config or os.environ.get('ARGOSBX_SERVERS_FILE',DEFAULT)).expanduser().resolve()}
-            protected|={resolve_path(v).resolve() for k,v in config.get('cloudflare',{}).items() if k in ('token_file','policy_snapshot')}
-            protected|={resolve_path(s['ssh'][k]).resolve() for s in config['servers'] for k in ('identity_file','known_hosts') if s['ssh'].get(k)}
+            protected|={resolve_path(v,config).resolve() for k,v in config.get('cloudflare',{}).items() if k in ('token_file','policy_snapshot')}
+            protected|={resolve_path(s['ssh'][k],config).resolve() for s in config['servers'] for k in ('identity_file','known_hosts') if s['ssh'].get(k)}
             output=Path(a.output).expanduser()
             if output.resolve() in protected or output.is_dir() or output.is_symlink():raise ValueError('报告不能覆盖配置、凭据或 SSH 信任文件，也不能写到目录或符号链接')
         targets=[s for s in config['servers'] if s.get('status','active')=='active' and (a.server=='all' or s['id']==a.server)]
@@ -55,7 +55,7 @@ def main():
             if a.recover_writes:result={**cf_probe.recover(cf,journal),'read_only':False}
             else:
                 policy=config['cloudflare'].get('policy_snapshot')
-                result=cf_audit.audit(cf,server,resolve_path(policy) if policy else None)
+                result=cf_audit.audit(cf,server,resolve_path(policy,config) if policy else None)
                 if a.verify_writes:
                     result['write_verification']=cf_probe.verify(cf,server,journal)
                     result['writes_tested']=True;result['read_only']=False

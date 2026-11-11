@@ -9,8 +9,12 @@ import json
 import os
 from pathlib import Path
 import runpy
+import subprocess
 import sys
+import time
 import urllib.request
+import urllib.error
+from urllib.parse import parse_qsl, urlencode, urlsplit
 
 sys.dont_write_bytecode = True
 from fleet import WORKSPACE, STATE, read, active_config
@@ -378,6 +382,65 @@ def publish(config):
     return {'发布成功':True,'修改对象数':len(attempted),'原订阅回读':True,'代理进程重启':False}
 
 
+def sync_standard_rules(config):
+    """Run after releasing the publication lease; the remote command locks itself."""
+    from fleet import ssh_args
+    ident=config.get('coordinator')
+    if not ident:return {'status':'not_configured'}
+    try:
+        proc=subprocess.run(ssh_args(ident,config)+[
+            'python3 -B /opt/argosbx-fleet/current/standard_rule_source.py refresh --if-configured'],
+            text=True,capture_output=True,timeout=150)
+        if proc.returncode:return {'status':'failed'}
+        value=json.loads(proc.stdout)
+        if value.get('configured') is False:return {'status':'not_configured'}
+        if value.get('configured') is True and value.get('verified') is True:
+            return {'status':'verified','updated':value.get('updated',0)}
+    except (OSError,ValueError,TypeError,subprocess.SubprocessError):
+        pass
+    return {'status':'failed'}
+
+
+def sync_retired_countries(config):
+    """Retire only countries without an active server and verify the old URL."""
+    from fleet import ssh_args
+    active={s['country'] for s in config['servers'] if s.get('status','active')=='active'}
+    retired=sorted({s['country'] for s in config['servers'] if s.get('status','active')=='pending'}-active)
+    ident=config.get('coordinator')
+    if not ident:return {'status':'not_configured'}
+    args=ssh_args(ident,config);script='/opt/argosbx-fleet/current/country_routes.py '
+    def command(action,body=None):
+        proc=subprocess.run(args+['python3 -B '+script+action],input=None if body is None else json.dumps(body),
+                            text=True,capture_output=True,timeout=45)
+        if proc.returncode:raise RuntimeError('国家订阅路由操作失败')
+        return json.loads(proc.stdout)
+    changed=False
+    try:
+        staged=command('retired-stage',{'countries':retired});changed=staged.get('changed') is True
+        parsed=urlsplit(config['subscription']['public_url'])
+        base=[(k,v) for k,v in parse_qsl(parsed.query,keep_blank_values=True) if k!='format']
+        for country in sorted(active|set(retired)):
+            url=parsed._replace(query=urlencode(base+[('format','shadowrocket-'+country.lower())])).geturl()
+            req=urllib.request.Request(url,headers={'User-Agent':'Shadowrocket/2.2.72'})
+            wanted=410 if country in retired else 200
+            for attempt in range(5):
+                try:
+                    with urllib.request.urlopen(req,timeout=10) as response:status=response.status
+                except urllib.error.HTTPError as error:
+                    status=error.code;error.close()
+                if status==wanted:break
+                if attempt<4:time.sleep(.25)
+            if status!=wanted:raise ValueError('国家订阅回读失败')
+        if changed:command('retired-finish')
+        return {'status':'verified','retired':retired}
+    except (OSError,ValueError,RuntimeError,TypeError,subprocess.SubprocessError):
+        if changed:
+            try:command('retired-recover')
+            except (OSError,ValueError,RuntimeError,TypeError,subprocess.SubprocessError):
+                return {'status':'failed_recovery_pending'}
+        return {'status':'failed'}
+
+
 def main():
     p=argparse.ArgumentParser(description='ArgoSBX 服务器资料与原 Sub-Store 订阅维护')
     p.add_argument('command',choices=['check','generate','plan','publish','recover'])
@@ -393,6 +456,11 @@ def main():
             elif args.command=='plan':result=summarize(prepare(config))
             elif args.command=='publish':result=publish(config)
             else:result=[publication.recover(p,config,get,request,digest) for p in [JOURNAL,STAGING]]
+        if args.command=='publish':
+            result['独立规则同步']=sync_standard_rules(config)
+            result['国家订阅路由']=sync_retired_countries(config)
+            if result['独立规则同步']['status']=='failed' or result['国家订阅路由']['status'].startswith('failed'):
+                print(json.dumps(result,ensure_ascii=False));raise SystemExit(2)
         print(json.dumps(result,ensure_ascii=False))
     except Exception as error:
         # Library/network exceptions can contain private subscription URLs.

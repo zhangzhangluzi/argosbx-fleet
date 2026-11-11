@@ -20,12 +20,13 @@ flowchart LR
 从 GitHub Release 下载版本包和 SHA256SUMS，先校验再安装。[下载维护包](https://github.com/zhangzhangluzi/argosbx-fleet/releases/latest)
 ```sh
 sha256sum -c SHA256SUMS &&
-  tar -xzf argosbx-fleet-v1.2.30.tar.gz install.py &&
-  python3 install.py argosbx-fleet-v1.2.30.tar.gz --sha256 "$(cut -d ' ' -f1 SHA256SUMS)"
+  tar -xzf argosbx-fleet-v1.2.31.tar.gz install.py &&
+  python3 install.py argosbx-fleet-v1.2.31.tar.gz --sha256 "$(cut -d ' ' -f1 SHA256SUMS)"
 ```
 安装到 `/opt/argosbx-fleet/<版本>`，原子更新 `current` 符号链接。同一版本内容不可覆盖。升级使用相同命令；数据与凭据不在发布包内。
 ## 配置入口
 复制 `templates/servers.example.json` 到私有路径，设置权限 0600；通过 `ARGOSBX_SERVERS_FILE` 指定。`ARGOSBX_WORKSPACE` 用于解析相对 SSH 路径；`ARGOSBX_STATE` 为计划和恢复日志目录。设置 `coordinator` 为运行 Sub-Store 的服务器 ID，使用该机原生 `flock` 排除跨工作站同时发布。每次 Sub-Store 请求前后检查锁连接；检测到连接断开就停止写入并保留恢复日志。它不提供服务端数据库 fencing，已在途的请求仍须回读确认。
+当资料文件放在工作区的 `.vpn-deploy/servers.json` 且未设置 `ARGOSBX_WORKSPACE` 时，相对 SSH 和 Cloudflare 私有文件路径以该工作区为准，执行命令的当前目录不影响解析；显式设置的工作区仍优先。
 初次接管现有安装：向各 VPS `agent.py adopt` 标准输入传递 `{server_id, services}`；services 是原生配置完整路径到 systemd unit 的映射。程序读取实际端口、TLS 参数、凭据和源节点，校验两个内核并确认接管前后正式节点等价，再保存 `/etc/argosbx-fleet/server.json`。同类协议存在多个入站时拒绝自动猜测；需要先明确映射。
 ```sh
 python3 fleetctl.py inspect --server jp
@@ -83,7 +84,7 @@ python3 onboard.py add --config /private/servers.json --server jp2 --country JP 
 python3 onboard.py install --config /private/servers.json --server jp2
 ```
 `add` 生成完整可编辑的默认值、独立域名及随机私密源路径，状态为 `pending`，不会参与现有服务器发布。`install` 串联主机检查、校验固定版本二进制、创建固定隧道、DNS、Caddy ACME 证书、两个代理内核、导出定时器、外部 HTTPS 源验收、独立客户端逐协议 HTTPS/出口 IP/UDP 验收，再登记 Sub-Store 源、更新原订阅并转为 `active`。验收使用其他已启用服务器的临时回环客户端；IPv6 需有另一台具备 IPv6 的验收端，条件不足或任一检查失败均保持 `pending`。已有统一地址不变。不得把现有 VPS 当成空白机；检测到已有安装即拒绝覆盖。安装中断后用原配置重复同一命令续装，保留第一次生成的节点凭据。
-v1.2.30 新机初始化固定使用 Xray 26.10.31，并校验 amd64 和 arm64 的官方发布包。上游已撤回旧下载版本。[Xray 发布说明](https://github.com/XTLS/Xray-core/releases/tag/v26.10.31)
+v1.2.31 新机初始化固定使用 Xray 26.11.9 和 Caddy 2.11.9，并校验 amd64 和 arm64 的官方发布包。维护包安装不会升级现有代理内核。[Xray 发布说明](https://github.com/XTLS/Xray-core/releases/tag/v26.11.9)
 证书通过 Caddy 自动续期，协议使用稳定文件引用。云防火墙需要提前放行 TCP 80/443/8443/2447/2448 和 UDP 2446/8443（若调整端口，以初始化检查输出为准）；主机 UFW 已启用时仅追加这些端口，不清空规则。服务商防火墙没有通用 API，安装器不会冒充已自动放行。独立验收证明服务器之间可达，用户所在地的运营商路径仍可能不同。CF 创建失败保留私有接入日志，未知响应通过同一随机隧道名称回读，避免重复创建。
 
 ## 多入站模型
@@ -103,6 +104,7 @@ python3 servers.py publish
 `ads.applovin.com`、`ads.tiktok.com` 和已核对的 AppLovin MAX、旧后台跳转、官方帮助入口精确匹配到日常线路。三端优先应用完整域名例外，Clash 和 Stash 同步显式 DNS 策略。
 
 ## 去广告与投放后台例外
+独立规则源在主订阅发布后同步；每日广告更新任务结束后也会同步，失败时任务状态显示失败。需要修复已安装的标准规则处理器时，在发布服务器执行 `python3 -B /opt/argosbx-fleet/current/standard_provider_update.py`；异常保留恢复日志时使用同一命令的 `recover` 子命令。
 Clash/FlClash、Stash 使用 MetaCubeX `category-ads-all.mrs` 域名表，每 86400 秒更新。规则从上到下首次匹配：精确后台例外优先；命中广告表后交给“去广告”选择组，Clash 开启执行 REJECT，关闭执行 PASS，继续匹配后续应用和国内外规则。Stash 原订阅内同样提供“开启去广告／关闭去广告”分组，默认开启执行 REJECT；关闭后命中广告表的请求跟随日常线路，不再继续后面的国内外分流。这是两端明确的行为差异；Stash 不发出 PASS，也不需要单独安装覆写。其余请求和精确后台例外仍按原规则处理。例外和 DNS 策略由 `dns_policy.py` 一处生成，保持发布与导出一致。Shadowrocket 默认开启同源广告域名集：Sub-Store 将 `+.` 后缀转换为原生 `.` 格式，保留精确后台例外，避免引入更大、不同口径的广告表。
 
 可用 `python3 ad_rules.py <候选快照.json>` 从 GitHub 文件 API 获取同一提交的文本和 MRS，并用已安装的 Node 校验 MRS 类型和条目数。把候选通过标准输入交给订阅服务器的 `country_routes.py ads-stage`，核验版本化 MRS 下载后执行 `ads-finish`。在 `subscription.ad_rules_snapshot` 引用该快照后，原发布流程会校验实际 MRS 下载并生成同版本的 Shadowrocket 本地名单。失败时可继续使用已发布版本。服务器源的 `subscription.cache_key` 对应 Sub-Store 已预热的独立缓存，公网源恢复后可取回更新。

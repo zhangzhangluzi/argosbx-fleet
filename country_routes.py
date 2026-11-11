@@ -5,6 +5,7 @@ from storage import atomic,save
 
 COMPRESSION_JOURNAL=Path('/etc/argosbx-fleet/share-compression-journal.json')
 AD_JOURNAL = Path('/etc/argosbx-fleet/ad-route-journal.json')
+RETIRED_JOURNAL = Path('/etc/argosbx-fleet/retired-country-journal.json')
 AD_ROOT = Path('/srv/argosbx/ad-rules')
 AD_ROUTES = '''# BEGIN FLEET AD RULES
 handle /rules/ad/ads-*.mrs {
@@ -122,6 +123,60 @@ def render(text):
     new=new.replace(marker,handler+marker)
     return text[:start]+new+text[end:]
 
+
+def retired_render(text,countries):
+    if not isinstance(countries,list) or any(not isinstance(c,str) or not re.fullmatch('[A-Z]{2}',c) for c in countries):
+        raise ValueError('退役国家代码无效')
+    start='# BEGIN RETIRED COUNTRIES';end='# END RETIRED COUNTRIES'
+    if text.count(start)!=text.count(end) or text.count(start)>1:raise ValueError('退役路由标记异常')
+    if start in text:
+        a=text.index(start);b=text.index(end,a)+len(end)
+        a=text.rfind('\n',0,a)+1
+        if b<len(text) and text[b]=='\n':b+=1
+        text=text[:a]+text[b:]
+    begin=text.find('# BEGIN TI UNIFIED SUBSCRIPTION');finish=text.find('# END TI UNIFIED SUBSCRIPTION',begin)
+    if begin<0 or finish<0:raise ValueError('未找到原统一订阅路由')
+    block=text[begin:finish];marker='  @fleet_country expression'
+    if block.count(marker)!=1:raise ValueError('未找到唯一国家订阅路由')
+    values=sorted({c.lower() for c in countries})
+    if not values:return text
+    pattern='|'.join(values)
+    route=('  '+start+'\n'
+           '  @fleet_retired expression `{query.format}.matches("^shadowrocket-('+pattern+')$")`\n'
+           '  handle @fleet_retired {\n'
+           '   respond "Subscription retired" 410\n'
+           '  }\n'
+           '  '+end+'\n')
+    block=block.replace(marker,route+marker,1)
+    return text[:begin]+block+text[finish:]
+
+
+def retired_stage(countries,path=Path('/etc/caddy-sub/Caddyfile'),journal=RETIRED_JOURNAL):
+    if journal.exists():raise ValueError('退役国家路由有待恢复事务')
+    before=path.read_text();after=retired_render(before,countries)
+    if before==after:return {'changed':False}
+    with tempfile.NamedTemporaryFile(mode='w',suffix='.caddy') as f:
+        f.write(after);f.flush()
+        subprocess.run(['/usr/local/bin/caddy','validate','--config',f.name,'--adapter','caddyfile'],check=True,capture_output=True)
+    pid=int(subprocess.check_output(['systemctl','show','caddy-sub','-p','MainPID','--value']))
+    if pid<=1:raise ValueError('Caddy 进程不可确认')
+    st=path.stat();save(journal,{'before':before,'after':after,'uid':st.st_uid,'gid':st.st_gid,'mode':st.st_mode&0o777,'pid':pid})
+    if path.read_text()!=before:raise ValueError('Caddy 配置发生并发变化，保留事务')
+    atomic(path,after,st.st_mode&0o777);os.chown(path,st.st_uid,st.st_gid);os.kill(pid,signal.SIGUSR1)
+    return {'changed':True,'pending_readback':True}
+
+
+def retired_finish(restore=False,path=Path('/etc/caddy-sub/Caddyfile'),journal=RETIRED_JOURNAL):
+    if not journal.exists():return {'pending':False}
+    j=json.loads(journal.read_text());current=path.read_text()
+    if current not in (j['before'],j['after']):raise ValueError('Caddy 存在第三方修改，保留事务')
+    pid=int(subprocess.check_output(['systemctl','show','caddy-sub','-p','MainPID','--value']))
+    if pid!=j['pid']:raise ValueError('Caddy 进程已变化，保留事务')
+    if restore and current!=j['before']:
+        atomic(path,j['before'],j['mode']);os.chown(path,j['uid'],j['gid']);os.kill(pid,signal.SIGUSR1)
+    elif not restore and current!=j['after']:raise ValueError('退役路由尚未应用')
+    journal.unlink();return {'restored':restore,'committed':not restore}
+
 def upgrade():
     path=Path('/etc/caddy-sub/Caddyfile');journal=Path('/etc/argosbx-fleet/country-routes-journal.json')
     if journal.exists():raise ValueError('国家路由有未完成事务，请先恢复')
@@ -149,9 +204,11 @@ if __name__=='__main__':
     import argparse
     import sys
     from storage import lock
-    parser=argparse.ArgumentParser();parser.add_argument('command',choices=['upgrade','finish','recover','compress','compression-finish','compression-recover','ads-stage','ads-finish','ads-recover']);command=parser.parse_args().command
+    parser=argparse.ArgumentParser();parser.add_argument('command',choices=['upgrade','finish','recover','compress','compression-finish','compression-recover','ads-stage','ads-finish','ads-recover','retired-stage','retired-finish','retired-recover']);command=parser.parse_args().command
     with lock('/etc/argosbx-fleet/agent.lock'):
-        if command=='compress':result=compression_upgrade()
+        if command=='retired-stage':result=retired_stage(json.load(sys.stdin)['countries'])
+        elif command.startswith('retired-'):result=retired_finish(command=='retired-recover')
+        elif command=='compress':result=compression_upgrade()
         elif command.startswith('compression-'):result=compression_finish(command=='compression-recover')
         elif command=='ads-stage':result=stage_ads(json.load(sys.stdin))
         elif command.startswith('ads-'):result=compression_finish(command=='ads-recover',AD_JOURNAL)

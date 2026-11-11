@@ -5,6 +5,7 @@ After=network-online.target sub-store.service caddy-sub.service
 [Service]
 Type=oneshot
 ExecStart=/usr/bin/python3 -B /opt/argosbx-fleet/current/ad_delivery.py refresh
+ExecStartPost=/usr/bin/python3 -B /opt/argosbx-fleet/current/standard_rule_source.py refresh --if-configured
 TimeoutStartSec=240
 UMask=0077
 NoNewPrivileges=true

@@ -8,6 +8,8 @@ FILES=['stash-compat.js','xhttp.py','routing_policy.py','ech.py','country_routes
 FILES += ['udp_buffers.py','diagnostics.py','certificates.py','cf_audit.py','cf_probe.py','cf_transport.py','dependency_audit.py']
 FILES += ['reality_compat.py','vmess_compat.py','ad_rules.py','ad_delivery.py']
 FILES += ['stash_refresh.py']
+FILES += ['standalone_alias_routes.py','standalone_install.py','standalone_routes.py',
+          'standard_provider_install.py','standard_provider_routes.py','standard_provider_update.py','standard_rule_source.py']
 FILES += ['systemd/argosbx-ad-refresh.service', 'systemd/argosbx-ad-refresh.timer']
 
 def package(destination):

@@ -11,11 +11,18 @@ STATE = Path(os.environ.get('ARGOSBX_STATE', Path.home()/'.local/state/argosbx-f
 DEFAULT = Path(os.environ.get('ARGOSBX_SERVERS_FILE', Path.home()/'.config/argosbx-fleet/servers.json'))
 
 
+class Inventory(dict):
+    """Dict-compatible configuration with its non-serialized path context."""
+
+
 def read(path=None):
     path = Path(path or os.environ.get('ARGOSBX_SERVERS_FILE', DEFAULT)).expanduser().resolve()
     if path.stat().st_mode & 0o077:
         raise ValueError('服务器配置含私有链接，文件权限必须为 0600')
-    return validate(json.loads(path.read_text()))
+    data=Inventory(validate(json.loads(path.read_text())))
+    data.workspace=(path.parent.parent if 'ARGOSBX_WORKSPACE' not in os.environ and path.parent.name=='.vpn-deploy'
+                    else WORKSPACE)
+    return data
 
 
 def validate(data):
@@ -142,21 +149,21 @@ def region_spec(server):
             'cf': server['domains']['cf'], 'salamanderIPv6': server['salamander_ipv6'], 'protocols':server.get('protocols',{})}
 
 
-def resolve_path(value):
+def resolve_path(value, data=None):
     path = Path(value).expanduser()
-    return path if path.is_absolute() else WORKSPACE / path
+    return path if path.is_absolute() else getattr(data,'workspace',WORKSPACE) / path
 
 
 def ssh_args(server_id, data=None):
     s = servers(data)[server_id]['ssh']
     args = ['ssh', '-S', 'none', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8',
-            '-o', 'StrictHostKeyChecking=yes', '-o', 'UserKnownHostsFile=' + str(resolve_path(s['known_hosts'])),
+            '-o', 'StrictHostKeyChecking=yes', '-o', 'UserKnownHostsFile=' + str(resolve_path(s['known_hosts'],data)),
             '-p', str(s['port'])]
     # A multiplexed master ignores a changed destination. Reuse it only when
     # its separately recorded connection identity still matches the inventory.
-    sessions = WORKSPACE / '.vpn-deploy/ssh-sessions.json'
+    sessions = getattr(data,'workspace',WORKSPACE) / '.vpn-deploy/ssh-sessions.json'
     saved = json.loads(sessions.read_text()).get(server_id, {}) if sessions.exists() else {}
     if all(saved.get(k) == s[k] for k in ('host', 'port', 'user')) and saved.get('socket'):
-        args[2] = str(resolve_path(saved['socket']))
-    if s.get('identity_file'): args += ['-i', str(resolve_path(s['identity_file'])), '-o', 'IdentitiesOnly=yes']
+        args[2] = str(resolve_path(saved['socket'],data))
+    if s.get('identity_file'): args += ['-i', str(resolve_path(s['identity_file'],data)), '-o', 'IdentitiesOnly=yes']
     return args + [s['user'] + '@' + s['host']]

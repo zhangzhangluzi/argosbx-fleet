@@ -63,6 +63,16 @@ def certificate_client(n,port):
     return {'log':{'loglevel':'error'},'inbounds':[{'listen':'127.0.0.1','port':port,'protocol':'socks','settings':{'udp':True}}],
             'outbounds':[{'protocol':'hysteria','settings':{'version':2,'address':n['server'],'port':n['port']},'streamSettings':stream}]}
 
+def singbox_client(n,port):
+    """Use the observer's system resolver rather than a region-specific DoH endpoint."""
+    return {'log':{'level':'error'},'inbounds':[{'type':'socks','listen':'127.0.0.1','listen_port':port}],
+            'outbounds':outbound(n),
+            'dns':{'servers':[{'type':'local','tag':'local'},
+                              {'type':'https','tag':'ech','server':'dns.alidns.com','path':'/dns-query','domain_resolver':'local'}],
+                   'rules':[{'domain':['cloudflare-ech.com'],'server':'ech'}],'final':'local'},
+            'route':{'default_domain_resolver':'local'}}
+
+
 def recv(sock,size):
     data=b''
     while len(data)<size:
@@ -141,14 +151,9 @@ def client_session(case,binary='/root/agsbx/sing-box'):
         root=Path(temp)
         is_xhttp=case['node'].get('network')=='xhttp'
         cert_probe=case['node'].get('_certificate_sha256') and case['node']['type']=='hysteria2'
-        config=certificate_client(case['node'],port) if cert_probe else xhttp_client(case['node'],port) if is_xhttp else {'log':{'level':'error'},'inbounds':[{'type':'socks','listen':'127.0.0.1','listen_port':port}], 'outbounds':outbound(case['node'])}
+        config=certificate_client(case['node'],port) if cert_probe else xhttp_client(case['node'],port) if is_xhttp else singbox_client(case['node'],port)
         # Hostname-based CF ingress must resolve without any local VPN or TUN dependency.
         if is_xhttp or cert_probe:binary=str(Path(binary).with_name('xray'))
-        else:
-            config['dns']={'servers':[{'type':'https','tag':'local','server':'223.5.5.5','path':'/dns-query'},
-                {'type':'https','tag':'ech','server':'dns.alidns.com','path':'/dns-query','domain_resolver':'local'}],
-                'rules':[{'domain':['cloudflare-ech.com'],'server':'ech'}],'final':'local'}
-            config['route']={'default_domain_resolver':'local'}
         path=root/'client.json';path.write_text(json.dumps(config));path.chmod(0o600)
         with (root/'log').open('w') as log:
             # Native cores cannot inherit these listeners. Keep the reservation

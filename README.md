@@ -20,8 +20,8 @@ flowchart LR
 从 GitHub Release 下载版本包和 SHA256SUMS，先校验再安装。[下载维护包](https://github.com/zhangzhangluzi/argosbx-fleet/releases/latest)
 ```sh
 sha256sum -c SHA256SUMS &&
-  tar -xzf argosbx-fleet-v1.2.34.tar.gz install.py &&
-  python3 install.py argosbx-fleet-v1.2.34.tar.gz --sha256 "$(cut -d ' ' -f1 SHA256SUMS)"
+  tar -xzf argosbx-fleet-v1.2.35.tar.gz install.py &&
+  python3 install.py argosbx-fleet-v1.2.35.tar.gz --sha256 "$(cut -d ' ' -f1 SHA256SUMS)"
 ```
 安装到 `/opt/argosbx-fleet/<版本>`，原子更新 `current` 符号链接。同一版本内容不可覆盖。升级使用相同命令；数据与凭据不在发布包内。
 ## 配置入口
@@ -85,7 +85,7 @@ python3 onboard.py install --config /private/servers.json --server jp2
 ```
 `add` 生成完整可编辑的默认值、独立域名及随机私密源路径，状态为 `pending`，不会参与现有服务器发布。`install` 串联主机检查、校验固定版本二进制、创建固定隧道、DNS、Caddy ACME 证书、两个代理内核、导出定时器、外部 HTTPS 源验收、独立客户端逐协议 HTTPS/出口 IP/UDP 验收，再登记 Sub-Store 源、更新原订阅并转为 `active`。验收使用其他已启用服务器的临时回环客户端；IPv6 需有另一台具备 IPv6 的验收端，条件不足或任一检查失败均保持 `pending`。已有统一地址不变。不得把现有 VPS 当成空白机；检测到已有安装即拒绝覆盖。安装中断后用原配置重复同一命令续装，保留第一次生成的节点凭据。
 目标机必须预装 Python 3 和 systemd；脚本先通过标准库检查空白状态、断点日志、监听地址、现有维护版本，才安装其他依赖或上传维护包。发布前写入私有本地事务并在协调机创建独立标记，阻止其他遵守该标记的控制端发布；订阅回读和资料落盘后才提交，并同步独立规则与国家订阅路由。中断后在原控制机使用相同 `onboard.py install --config ... --server ...` 恢复；外部修改冲突时保留现场。若原控制机的私有事务文件遗失，协调标记会阻止其他发布，需要先核对订阅和资料再人工处理，不能盲目删除标记。该机制不约束不使用本程序锁的第三方写入。
-v1.2.34 新机初始化固定使用 Xray 26.11.9 和 Caddy 2.11.9，并校验 amd64 和 arm64 的官方发布包。默认加入已有的 CF XHTTP 入口；无 IPv6 地址的新机使用 IPv4 监听。维护包安装不会升级现有代理内核。[Xray 发布说明](https://github.com/XTLS/Xray-core/releases/tag/v26.11.9)
+v1.2.35 新机初始化固定使用 Xray 26.11.9 和 Caddy 2.11.9，并校验 amd64 和 arm64 的官方发布包。默认加入已有的 CF XHTTP 入口；无 IPv6 地址的新机使用 IPv4 监听。维护包安装不会升级现有代理内核。[Xray 发布说明](https://github.com/XTLS/Xray-core/releases/tag/v26.11.9)
 证书通过 Caddy 自动续期，协议使用稳定文件引用。云防火墙需要提前放行 TCP 80/443/8443/2447/2448 和 UDP 2446/8443（若调整端口，以初始化检查输出为准）；主机 UFW 已启用时仅追加这些端口，不清空规则。服务商防火墙没有通用 API，安装器不会冒充已自动放行。独立验收证明服务器之间可达，用户所在地的运营商路径仍可能不同。CF 创建失败保留私有接入日志，未知响应通过同一随机隧道名称回读，避免重复创建。
 
 ## 多入站模型
@@ -121,7 +121,7 @@ Clash/FlClash、Stash 使用 MetaCubeX `category-ads-all.mrs` 域名表，每 86
 这是域名连接拦截，无 HTTPS 解密、页面元素过滤或 URL 路径匹配，不能区分同域名下的后台资源与广告，也不能保证去除同源视频广告。不能因域名含 `ads` 就直接拒绝，也不能为修复后台而放行整个 SDK 域名树。
 
 ## ECH 自动策略
-CF 入口固定通过 `https://dns.alidns.com/dns-query` 查询 `cloudflare-ech.com` 的 HTTPS 记录；真实 SNI/Host 与原证书保持一致。Clash 的 ECH 引导 DNS 使用 `proxy-server-nameserver-policy`，不经过待建立的代理。
+CF 入口固定通过 `https://dns.alidns.com/dns-query` 查询 `cloudflare-ech.com` 的 HTTPS 记录；真实 SNI/Host 与原证书保持一致。Clash 的 ECH 引导 DNS 使用 `proxy-server-nameserver-policy`，不经过待建立的代理。海外 VPS 的独立验收客户端单独使用 `https://1.1.1.1/dns-query` 查询 ECH，避免其访问阿里 DoH 失败导致误报；不改动用户客户端的 DNS。
 AnyTLS、Hysteria2、Hysteria2 Salamander 的 TLS 终止在 VPS，本机原生 Xray/sing-box 自动生成独立 ECH 密钥；外层公开名称同为 `cloudflare-ech.com`，不复用 Cloudflare 的服务端私钥。私钥只保存在原生配置与 0600 事务/登记文件，订阅只携带对应公开 ECHConfigList。重复 plan/export 不轮换密钥，停用再启用保留身份；配置或密钥不一致时阻止导出。无需增加 inventory 参数或用户自定义输入。
 当前 Mihomo 的 REALITY 分支与 ShadowTLS 分支不调用普通 ECH 握手，不能通过增加 `ech-opts` 获得 ECH；维持原生机制并验证连接。Salamander 已混淆整个 QUIC 包，ECH 仍在其中的 TLS 握手启用。Stash 导出保留字段，但缺少官方 ECH 能力声明与本机运行端时，不把它视为已验证 ECH 客户端。
 维护工具安装不重启代理；首次 ECH 启用要通过原生协议计划和允许重启的应用步骤。逐台验收可使用 `agent.py apply --allow-restart --defer-commit` 保留现有恢复日志，外部握手和代理业务通过后 `agent.py commit`；失败用 `agent.py recover --allow-restart`。未提交事务阻止后续导出/发布。

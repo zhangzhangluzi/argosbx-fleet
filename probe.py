@@ -2,6 +2,10 @@
 import concurrent.futures,contextlib,http.client,ipaddress,json,os,secrets,socket,ssl,struct,subprocess,tempfile,time,threading
 from pathlib import Path
 
+# The isolated observers run on overseas VPS hosts.  Keep their ECH bootstrap
+# independent from the client subscription and its region-specific DNS policy.
+OBSERVER_ECH_DOH='https://1.1.1.1/dns-query'
+
 def outbound(n):
     out={'type':n['type'],'tag':'proxy','server':n['server'],'server_port':n['port']}
     tls={'enabled':True,'server_name':n.get('sni',n.get('servername'))}
@@ -37,7 +41,7 @@ def xhttp_client(n,port):
     tls={'serverName':n['servername'],'fingerprint':n.get('client-fingerprint','chrome'),'alpn':['h2']}
     if n.get('_certificate_path'):tls['certificates']=[{'certificateFile':n['_certificate_path'],'usage':'verify'}]
     ech=n.get('ech-opts',{})
-    if ech.get('enable'):tls['echConfigList']=ech.get('config') or ech.get('query-server-name','cloudflare-ech.com')+'+https://dns.alidns.com/dns-query'
+    if ech.get('enable'):tls['echConfigList']=ech.get('config') or ech.get('query-server-name','cloudflare-ech.com')+'+'+OBSERVER_ECH_DOH
     opts=n['xhttp-opts']
     from protocols import xhttp_xmux
     settings={'path':opts['path'],'host':opts.get('host'),'mode':opts['mode']}
@@ -68,7 +72,7 @@ def singbox_client(n,port):
     return {'log':{'level':'error'},'inbounds':[{'type':'socks','listen':'127.0.0.1','listen_port':port}],
             'outbounds':outbound(n),
             'dns':{'servers':[{'type':'local','tag':'local'},
-                              {'type':'https','tag':'ech','server':'dns.alidns.com','path':'/dns-query','domain_resolver':'local'}],
+                              {'type':'https','tag':'ech','server':'1.1.1.1','path':'/dns-query','domain_resolver':'local'}],
                    'rules':[{'domain':['cloudflare-ech.com'],'server':'ech'}],'final':'local'},
             'route':{'default_domain_resolver':'local'}}
 

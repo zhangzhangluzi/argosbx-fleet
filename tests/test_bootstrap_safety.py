@@ -10,7 +10,7 @@ class BootstrapSafetyTests(unittest.TestCase):
         self.server=onboard.defaults('test','JP','日本','192.0.2.1',None,'example.com','/fixture/key','/fixture/known')
         self.paths={k:self.root/k for k in ('journal','native','state','caddy','current')}
 
-    def check(self):return host_preflight.check(self.server,'v1.2.34',**self.paths)
+    def check(self):return host_preflight.check(self.server,'v1.2.35',**self.paths)
 
     def system(self):
         return (patch.object(host_preflight.os,'geteuid',return_value=0),
@@ -83,6 +83,6 @@ class BootstrapSafetyTests(unittest.TestCase):
         dest=self.root/'installed';dest.mkdir();(dest/'v1.0.0').mkdir();(dest/'current').symlink_to('v1.0.0')
         with patch.object(install.os,'rename',side_effect=OSError(errno.ENOSPC,'simulated interrupted rename')):
             with self.assertRaises(OSError):install.install(archive,digest,dest)
-        self.assertEqual(os.readlink(dest/'current'),'v1.0.0');self.assertFalse((dest/'v1.2.34').exists())
-        self.assertEqual(install.install(archive,digest,dest)['installed'],'v1.2.34')
-        self.assertEqual(os.readlink(dest/'current'),'v1.2.34')
+        self.assertEqual(os.readlink(dest/'current'),'v1.0.0');self.assertFalse((dest/'v1.2.35').exists())
+        self.assertEqual(install.install(archive,digest,dest)['installed'],'v1.2.35')
+        self.assertEqual(os.readlink(dest/'current'),'v1.2.35')

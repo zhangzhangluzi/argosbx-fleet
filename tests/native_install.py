@@ -85,6 +85,7 @@ from protocols import export
 nodes=export(agent.configs(state),state)['proxies']
 for node in nodes:
  ident=node['name'][6:];p=server['protocols'][ident]
+ if ident=='xhttp':continue # XHTTP uses the installed Xray client in the next probe.
  out={'type':node['type'],'tag':'proxy','server':'127.0.0.1','server_port':p['port']};extras=[]
  tls={'enabled':True,'server_name':p.get('sni','ci.example.com'),'certificate_path':server['certificates']['domain']['certificate_file']}
  if ident=='reality':out.update(uuid=node['uuid'],flow=node['flow'],tls={'enabled':True,'server_name':p['sni'],'utls':{'enabled':True,'fingerprint':'chrome'},'reality':{'enabled':True,'public_key':node['reality-opts']['public-key'],'short_id':node['reality-opts']['short-id']}})
@@ -137,6 +138,7 @@ def checked(fn):
 for n in nodes:
  n=copy.deepcopy(n);ident=n['name'][6:];n['server']='127.0.0.1';n['_certificate_path']=server['certificates']['domain']['certificate_file']
  if ident=='cf':n['tls']=False;n['port']=server['protocols']['cf']['port']
+ if ident=='xhttp':n['tls']=False;n['port']=server['protocols']['xhttp']['port']
  if ident=='shadowtls':n['plugin-opts']['host']='ci.example.com'
  result=probe.check_case({'name':ident,'node':n,'expected_ips':['127.0.0.1']},https_check=checked(probe_https),udp_check=checked(probe_udp))
  assert all(result[k] for k in ('https_ok','exit_ok','udp_ok')),result
@@ -203,7 +205,7 @@ print('PASS registered native socket evidence without mutation',flush=True)
 # Create/edit/delete a second same-type listener through installed agent interfaces.
 desired=copy.deepcopy(server['protocols']);desired['anytls_second']={**desired['anytls'],'type':'anytls','port':25447}
 assert agent.plan({'protocols':desired})['added']==['anytls_second']
-agent.apply(True);assert len(agent.load()['protocols'])==7
+agent.apply(True);assert len(agent.load()['protocols'])==len(server['protocols'])+1
 assert any(p['port']==25447 for p in export(agent.configs(agent.load()),agent.load())['proxies'])
 agent.plan({'protocols':server['protocols']});agent.apply(True)
 assert before=={p:Path(p).read_bytes() for p in before}
@@ -211,6 +213,9 @@ print('PASS blank install, resume, native clients, second inbound add/remove, or
 
 # Additional XHTTP service must preserve every existing process and configuration.
 import xhttp
+legacy=copy.deepcopy(server['protocols']);legacy.pop('xhttp')
+agent.plan({'protocols':legacy});agent.apply(True)
+stage_before={p:Path(p).read_bytes() for p in agent.load()['native_sha256']}
 settings={'enabled':True,'listen':'127.0.0.1','port':18084,'sni':'edge.example.com','path':'/ci_xhttp_fixture','mode':'packet-up','client':{'client-fingerprint':'chrome'}}
 pids={u:agent.cmd(['systemctl','show',u,'-p','MainPID','--value']) for u in ['xr','sb','caddy-sub','argo']}
 assert xhttp.stage(settings)['ready']
@@ -254,7 +259,7 @@ with open('/tmp/fleet-ci-xhttp-tls.log','w') as log:
  finally:
   tls_server.terminate();tls_server.wait(timeout=10)
 assert pids=={u:agent.cmd(['systemctl','show',u,'-p','MainPID','--value']) for u in pids}
-assert before=={p:Path(p).read_bytes() for p in before}
+assert stage_before=={p:Path(p).read_bytes() for p in stage_before}
 xhttp.recover()
 assert pids=={u:agent.cmd(['systemctl','show',u,'-p','MainPID','--value']) for u in pids}
 print('PASS additive XHTTP Encryption HTTPS/UDP and recovery without existing service restart',flush=True)

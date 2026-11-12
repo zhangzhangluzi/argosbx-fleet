@@ -22,9 +22,10 @@ def cleanup(path,j,config,request):
         j['temporary'].remove([kind,name] if [kind,name] in j['temporary'] else (kind,name))
         save(path,j)
 
-def recover(path,config,get,request,digest):
+def recover(path,config,get,request,digest,owner=None):
     if not path.exists():return {'recovered':False}
     j=json.loads(path.read_text())
+    if owner is not None and j.get('owner')!=owner:raise ValueError('发布事务归属不符，拒绝恢复')
     if j['backend_sha256']!=digest(config['subscription']['backend_url']):raise ValueError('恢复日志属于另一订阅后端')
     failures=[];pending=[]
     for item in reversed(j.get('attempted',[])):
@@ -43,7 +44,8 @@ def recover(path,config,get,request,digest):
     cleanup(path,j,config,request)
     path.unlink();return {'recovered':True}
 
-def begin(path,config,digest):
+def begin(path,config,digest,owner=None):
     if path.exists():raise ValueError('有未完成发布事务，请先执行 recover')
     j={'backend_sha256':digest(config['subscription']['backend_url']),'attempted':[],'temporary':[]}
+    if owner is not None:j['owner']=owner
     save(path,j);return j

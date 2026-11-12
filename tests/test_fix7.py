@@ -61,7 +61,7 @@ class BindingTests(unittest.TestCase):
   s=self.server();s['protocols']['cf_alt']={**s['protocols']['cf'],'type':'cf','sni':'other.example.com','ws_path':'/other','port':18084}
   plan=domains.build(FakeCF(),'example.com',s,{'cf':'newedge.example.com'},'00000000-0000-0000-0000-000000000000')
   new=[r for r in plan['after']['ingress'] if r.get('hostname')=='newedge.example.com']
-  self.assertEqual(len(new),1);self.assertTrue(new[0]['service'].endswith(':18082'))
+  self.assertEqual(len(new),2);self.assertEqual({r['service'].rsplit(':',1)[-1] for r in new},{'18082','18083'})
 
 class PendingTests(unittest.TestCase):
  def test_pending_excluded_from_generated_country_dns_and_sources(self):

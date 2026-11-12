@@ -20,8 +20,8 @@ flowchart LR
 从 GitHub Release 下载版本包和 SHA256SUMS，先校验再安装。[下载维护包](https://github.com/zhangzhangluzi/argosbx-fleet/releases/latest)
 ```sh
 sha256sum -c SHA256SUMS &&
-  tar -xzf argosbx-fleet-v1.2.33.tar.gz install.py &&
-  python3 install.py argosbx-fleet-v1.2.33.tar.gz --sha256 "$(cut -d ' ' -f1 SHA256SUMS)"
+  tar -xzf argosbx-fleet-v1.2.34.tar.gz install.py &&
+  python3 install.py argosbx-fleet-v1.2.34.tar.gz --sha256 "$(cut -d ' ' -f1 SHA256SUMS)"
 ```
 安装到 `/opt/argosbx-fleet/<版本>`，原子更新 `current` 符号链接。同一版本内容不可覆盖。升级使用相同命令；数据与凭据不在发布包内。
 ## 配置入口
@@ -60,7 +60,7 @@ python3 fleetctl.py domain-commit --server jp
 域名恢复使用 `domain-recover`，仅删除带本次事务标记的新增 DNS，避免误删他人记录。提交后的 DNS 不单独删除；先恢复客户端与服务端引用。实际新域名切换必须有有效管理 Token 和目标域名，本仓库的模拟测试不能代替真实外网验收。
 ## 分流与测速
 继续使用 [MetaCubeX/meta-rules-dat](https://github.com/MetaCubeX/meta-rules-dat) 国内域名/IP 与广告集合，日更且使用客户端缓存。优先保留 Google Play、AI、Telegram 例外；飞书业务/静态资源显式直连。Clash 的国内 DNS 跟随相同国内规则集，新版 Stash 同样引用国内路由规则集；旧版及未知版本保留 geosite:cn 兼容分支；国内走 AliDNS HTTPS，国外走代理上的 Cloudflare HTTPS。禁用明文 DNS 回退，节点解析保留独立启动路径。Shadowrocket 使用对应 ChinaMax DOMAIN-SET；其 DNS 覆写用于直连规则，改用国内 DoH，代理域名仍交给节点解析，保留独立原生格式。参见 [Stash DNS](https://stash.wiki/features/dns-server)、[Mihomo DNS](https://wiki.metacubex.one/config/dns/) 及 [Shadowrocket 配置说明](https://github.com/LOWERTOP/Shadowrocket/wiki#修改dns)。
-`health.interval` 统一支持 900 或 1800 秒，默认 900。日常、AI、Telegram、国家自动组及现有节点名称保留；去广告开关按客户端原生能力适配。Clash/FlClash 导出始终是带规则分组的完整配置。
+`health.interval` 统一支持 900 或 1800 秒，缺省为 1800；已有显式设置不变。日常、AI、Telegram、国家自动组及现有节点名称保留；去广告开关按客户端原生能力适配。Clash/FlClash 导出始终是带规则分组的完整配置。
 
 设为 `1800` 可统一每 30 分钟自动测速。Stash 的上层选择组显式关闭独立测速，只由使用中的国家自动组执行定时检测，避免其默认 600 秒递归测速覆盖预期间隔；手动测速及国家组自动选择仍可使用。
 UU 远程、向日葵与 ToDesk 的服务域名及其 DNS 显式直连。Clash/FlClash 将这些域名从 Fake-IP 排除，并按进程名前缀匹配主程序、服务和辅助进程，覆盖纯 IP 的 TCP/UDP 中继与 P2P；需要运行在能识别本机进程的客户端上，不能据此保证其他设备经路由器转发的流量。明文 DNS 防护仍优先；Stash/Shadowrocket 仅使用各自兼容的域名规则，不下发 Mihomo 专用进程正则。
@@ -84,7 +84,8 @@ python3 onboard.py add --config /private/servers.json --server jp2 --country JP 
 python3 onboard.py install --config /private/servers.json --server jp2
 ```
 `add` 生成完整可编辑的默认值、独立域名及随机私密源路径，状态为 `pending`，不会参与现有服务器发布。`install` 串联主机检查、校验固定版本二进制、创建固定隧道、DNS、Caddy ACME 证书、两个代理内核、导出定时器、外部 HTTPS 源验收、独立客户端逐协议 HTTPS/出口 IP/UDP 验收，再登记 Sub-Store 源、更新原订阅并转为 `active`。验收使用其他已启用服务器的临时回环客户端；IPv6 需有另一台具备 IPv6 的验收端，条件不足或任一检查失败均保持 `pending`。已有统一地址不变。不得把现有 VPS 当成空白机；检测到已有安装即拒绝覆盖。安装中断后用原配置重复同一命令续装，保留第一次生成的节点凭据。
-v1.2.33 新机初始化固定使用 Xray 26.11.9 和 Caddy 2.11.9，并校验 amd64 和 arm64 的官方发布包。维护包安装不会升级现有代理内核。[Xray 发布说明](https://github.com/XTLS/Xray-core/releases/tag/v26.11.9)
+目标机必须预装 Python 3 和 systemd；脚本先通过标准库检查空白状态、断点日志、监听地址、现有维护版本，才安装其他依赖或上传维护包。发布前写入私有本地事务并在协调机创建独立标记，阻止其他遵守该标记的控制端发布；订阅回读和资料落盘后才提交，并同步独立规则与国家订阅路由。中断后在原控制机使用相同 `onboard.py install --config ... --server ...` 恢复；外部修改冲突时保留现场。若原控制机的私有事务文件遗失，协调标记会阻止其他发布，需要先核对订阅和资料再人工处理，不能盲目删除标记。该机制不约束不使用本程序锁的第三方写入。
+v1.2.34 新机初始化固定使用 Xray 26.11.9 和 Caddy 2.11.9，并校验 amd64 和 arm64 的官方发布包。默认加入已有的 CF XHTTP 入口；无 IPv6 地址的新机使用 IPv4 监听。维护包安装不会升级现有代理内核。[Xray 发布说明](https://github.com/XTLS/Xray-core/releases/tag/v26.11.9)
 证书通过 Caddy 自动续期，协议使用稳定文件引用。云防火墙需要提前放行 TCP 80/443/8443/2447/2448 和 UDP 2446/8443（若调整端口，以初始化检查输出为准）；主机 UFW 已启用时仅追加这些端口，不清空规则。服务商防火墙没有通用 API，安装器不会冒充已自动放行。独立验收证明服务器之间可达，用户所在地的运营商路径仍可能不同。CF 创建失败保留私有接入日志，未知响应通过同一随机隧道名称回读，避免重复创建。
 
 ## 多入站模型

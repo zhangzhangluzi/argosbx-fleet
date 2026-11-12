@@ -22,6 +22,11 @@ from storage import lock, save
 
 CONFIG = Path('/etc/argosbx-fleet/ad-publisher.json')
 JOURNAL = CONFIG.with_name('ad-delivery-journal.json')
+ONBOARDING = CONFIG.with_name('onboarding-publication.id')
+
+def check_onboarding(path=None):
+    path=ONBOARDING if path is None else Path(path)
+    if path.exists() or path.is_symlink():raise ValueError('新机接入发布尚未完成，广告更新稍后重试')
 PREFIXES = ('', 'external-seven-')
 FORMATS = ('clash', 'stash', 'shadowrocket-config', 'shadowrocket-ads')
 CLIENTS = (('clash', 'FlClash/0.8.99'), ('stash', 'Stash/3.6.0'), ('stash', 'Stash/3.4.0'))
@@ -272,6 +277,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
     try:
         with lock('/run/argosbx-publisher.lock'):
+            check_onboarding()
             settings = read_config(args.config)
             seed = sys.stdin.read(ad_rules.MAX_BYTES) if args.action == 'initialize' else None
             result = refresh(settings, seed, verify_only=args.action == 'verify')

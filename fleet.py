@@ -102,7 +102,7 @@ def validate(data):
         selected=next((s for s in data['servers'] if s['id']==relay),None)
         if not isinstance(relay,str) or not selected or selected.get('status','active')!='active' or not selected.get('ipv4'):
             raise ValueError('cloudflare.management_server 必须引用已启用且有 IPv4 的服务器')
-    interval=data.get('health',{}).get('interval',900)
+    interval=data.get('health',{}).get('interval',1800)
     if type(interval) is not int or interval not in (900,1800): raise ValueError('health.interval 只支持 900 或 1800 秒')
     tolerance=data.get('health',{}).get('tolerance',100)
     if type(tolerance) is not int or not 0<=tolerance<=300:raise ValueError('health.tolerance 需为 0 到 300 毫秒')

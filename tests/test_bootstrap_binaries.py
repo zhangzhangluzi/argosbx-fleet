@@ -12,7 +12,7 @@ class BinaryPinTests(unittest.TestCase):
         self.archive=self.zip(b'old core');self.url='https://example.invalid/v1.zip'
         self.patchers=[patch.object(bootstrap,'ROOT',self.root),patch.object(bootstrap,'NATIVE',self.native),patch.object(bootstrap.platform,'machine',return_value='x86_64')]
         for p in self.patchers:p.start();self.addCleanup(p.stop)
-        downloader=patch.object(bootstrap.urllib.request,'urlretrieve',side_effect=self.fetch)
+        downloader=patch.object(bootstrap,'download',side_effect=self.fetch)
         self.download=downloader.start();self.addCleanup(downloader.stop)
         self.pin()
     @staticmethod

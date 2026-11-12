@@ -73,7 +73,7 @@ class TunnelTests(unittest.TestCase):
         self.assertFalse(self.cf.tunnels)
     def test_two_cf_paths_independent_and_duplicate_refused(self):
         p=self.server['protocols'];p['cf_alt']={**p['cf'],'type':'cf','port':18083,'ws_path':'/another'}
-        self.assertEqual(len(tunnels.routes(self.server)),3)
+        self.assertEqual(len(tunnels.routes(self.server)),4)
         p['cf_alt']['ws_path']=p['cf']['ws_path']
         with self.assertRaises(ValueError):tunnels.routes(self.server)
     def test_changed_inventory_cannot_resume(self):
@@ -120,7 +120,7 @@ class CFRouteChangeTests(unittest.TestCase):
         cf.config={'ingress':[{'hostname':p['sni'],'service':'http://127.0.0.1:18082'},{'hostname':'unrelated.example.com','service':'http://127.0.0.1:9999'},{'service':'http_status:404'}]}
         old=copy.deepcopy(s['protocols']);s['protocols']['cf_second']={**p,'type':'cf','port':18083,'ws_path':'/second'}
         planned=tunnels.change_plan(cf,s,old)
-        self.assertEqual(len(planned['after']['ingress']),4)
+        self.assertEqual(len(planned['after']['ingress']),5)
         self.assertEqual(planned['after']['ingress'][-2:],cf.config['ingress'][-2:])
         self.assertEqual(planned['records'],[])
 

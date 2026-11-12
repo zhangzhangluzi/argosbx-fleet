@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Blank Ubuntu/Debian host installation. Existing deployments are never adopted here."""
-import argparse,hashlib,ipaddress,json,os,platform,re,shutil,socket,subprocess,sys,tarfile,tempfile,time,urllib.request,zipfile
+import argparse,hashlib,ipaddress,json,os,platform,re,shutil,socket,subprocess,sys,tarfile,tempfile,time,urllib.error,urllib.request,zipfile
 from pathlib import Path
 from urllib.parse import urlsplit
 from storage import save,atomic,lock
 from inbounds import reconcile
 from protocols import render,export,protocol_type
 import agent
+import host_preflight
 import udp_buffers
 ROOT=Path(__file__).resolve().parent
 JOURNAL=Path('/etc/argosbx-fleet/bootstrap.json')
@@ -18,31 +19,27 @@ def run(args,timeout=180):
     return p.stdout.strip()
 
 def ports(server):
-    result={('tcp',80),('tcp',8443)}
-    for i,p in server['protocols'].items():
-        if p['enabled'] and protocol_type(i,p)!='cf':result.add(('udp' if protocol_type(i,p) in ('hy2','salamander') else 'tcp',p['port']))
-    return sorted(result)
+    return host_preflight.ports(server)
 
 def preflight(server):
     from protocols import validate_settings
     validate_settings(server['protocols'],complete=True)
-    if os.geteuid()!=0 or platform.system()!='Linux':raise ValueError('空白机初始化需要 Linux root')
-    if shutil.which('systemctl') is None:raise ValueError('需要 systemd')
-    if not JOURNAL.exists():
-        if agent.STATE.exists() or NATIVE.exists() or Path('/etc/caddy-sub/Caddyfile').exists():raise ValueError('目标非空白服务器；请用 protocol-plan 管理已有安装')
-        for transport,port in ports(server):
-            with socket.socket(socket.AF_INET6,socket.SOCK_DGRAM if transport=='udp' else socket.SOCK_STREAM) as s:
-                try:s.bind(('::',port))
-                except OSError:raise ValueError('初始化端口已被占用：'+str(port)+'/'+transport) from None
-        from listeners import check
-        native={'inbounds':[]}
-        for ident,p in server['protocols'].items():
-            if not p['enabled']:continue
-            kind=protocol_type(ident,p)
-            if kind not in ('hy2','salamander') and p['port'] in (80,8443):raise ValueError('协议端口与 Caddy 冲突')
-            native['inbounds'].append({'type':'hysteria2' if kind in ('hy2','salamander') else kind,'listen':p['listen'],'listen_port':p['port']})
-        check({}, {'native':native})
-    return {'blank_or_resumable':True,'required_ingress':[str(p)+'/'+t for t,p in ports(server)]}
+    return host_preflight.check(server,journal=JOURNAL,native=NATIVE,state=agent.STATE)
+
+def download(url,path,attempts=3):
+    """Bound each request and retry transient failures without retaining partial data."""
+    for number in range(attempts):
+        try:
+            with urllib.request.urlopen(url,timeout=30) as source, Path(path).open('wb') as target:
+                shutil.copyfileobj(source,target,length=1024*1024)
+            return
+        except (urllib.error.URLError,TimeoutError,OSError) as error:
+            Path(path).unlink(missing_ok=True)
+            if isinstance(error,urllib.error.HTTPError):
+                error.close()
+                if error.code not in (408,429,500,502,503,504):raise
+            if number+1==attempts:raise
+            time.sleep(number+1)
 
 def binaries():
     arch={'x86_64':'amd64','aarch64':'arm64'}.get(platform.machine())
@@ -60,7 +57,7 @@ def binaries():
             if cached=={**provenance,'binary_sha256':hashlib.sha256(target.read_bytes()).hexdigest()}:continue
         with tempfile.TemporaryDirectory(prefix='fleet-download-') as d:
             archive=Path(d)/'archive'
-            urllib.request.urlretrieve(item['url'],archive)
+            download(item['url'],archive)
             if hashlib.sha256(archive.read_bytes()).hexdigest()!=item['sha256']:raise ValueError('上游二进制校验和不符：'+name)
             if item['url'].endswith('.zip'):
                 with zipfile.ZipFile(archive) as z:data=z.read(name)

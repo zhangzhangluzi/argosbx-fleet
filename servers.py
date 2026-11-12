@@ -90,7 +90,7 @@ def native_preflight(config):
     with ThreadPoolExecutor(max_workers=min(4,max(1,len(configured)))) as pool:list(pool.map(check,configured))
 
 
-def prepare(config):
+def prepare(config,owner=None):
     if JOURNAL.exists() or STAGING.exists():raise ValueError('有未完成发布事务，请先执行 recover')
     native_preflight(config)
     snapshot = ad_rules.load(config)
@@ -107,15 +107,15 @@ def prepare(config):
     if snapshot:
         plan['ad_rules_sha256']=digest(snapshot)
     # Validate in isolated native Sub-Store objects before changing production.
-    plan['rendered_sha256']=stage(config, payload)
+    plan['rendered_sha256']=stage(config, payload,owner=owner) if owner else stage(config,payload)
     save(PLAN,plan)
     return plan
 
 
-def stage(config, payload):
+def stage(config, payload,owner=None):
     import secrets
     import yaml
-    journal=publication.begin(STAGING,config,digest)
+    journal=publication.begin(STAGING,config,digest,owner=owner)
     prefix='server-check-'+secrets.token_hex(5)
     created=journal['temporary']
     def creating(kind,name):
@@ -208,7 +208,7 @@ def stage(config, payload):
             uri=request(config,'/download/collection/'+col['name']+'?target=URI',raw=True)
             rendered[country['name']]=digest(uri)
     finally:
-        publication.recover(STAGING,config,get,request,digest)
+        publication.recover(STAGING,config,get,request,digest,owner=owner)
     return rendered
 
 
@@ -308,7 +308,55 @@ def check_profile(value):
             raise ValueError('DNS 规则集引用无效')
 
 
-def publish(config):
+def verify_published(config,plan):
+    import yaml
+    for fmt in ['clash','stash']:
+        raw=stash_file(config,fmt,'Stash/3.6.0') if fmt=='stash' else request(config,'/api/file/'+fmt,raw=True)
+        value=yaml.safe_load(raw)
+        check_profile(value)
+        ad_rules.check_profile(value, fmt)
+        if digest(value)!=plan['rendered_sha256'][fmt]:raise ValueError('线上输出与已校验计划不符')
+        if fmt=='stash':
+            for key,sha in check_stash_file_cases(config,fmt,value).items():
+                if sha!=plan['rendered_sha256'][key]:raise ValueError('Stash 文件输出与已校验计划不符：'+key)
+    if digest(request(config,'/api/file/shadowrocket-config',raw=True))!=plan['rendered_sha256']['shadowrocket-config']:
+        raise ValueError('Shadowrocket 策略与已校验计划不符')
+    if 'shadowrocket-ads' in plan['rendered_sha256']:
+        raw=request(config,'/api/file/shadowrocket-ads',raw=True);check_sr_ads(raw)
+        if digest(raw)!=plan['rendered_sha256']['shadowrocket-ads']:raise ValueError('广告域名集已更新，请重新 plan')
+    for key,(target,ua) in DOWNLOAD_CASES.items():
+        if key not in plan['rendered_sha256']:continue
+        raw=request(config,'/download/collection/all?target='+target,raw=True,user_agent=ua)
+        refresh=stash_refresh.update_url('stash',config['subscription']['public_url']) if target=='Stash' else None
+        stash_refresh.check(raw,refresh)
+        value=yaml.safe_load(raw)
+        check_profile(value)
+        if digest(value)!=plan['rendered_sha256'][key]:raise ValueError('客户端导出与已校验计划不符：'+key)
+    for key,wanted in plan['rendered_sha256'].items():
+        if not key.startswith('country-profile:'):continue
+        _,name,case=key.split(':');target,ua=DOWNLOAD_CASES[case]
+        raw=request(config,'/download/collection/'+name+'?target='+target,raw=True,user_agent=ua)
+        stash_refresh.check(raw)
+        value=yaml.safe_load(raw)
+        check_profile(value)
+        if digest(value)!=wanted:raise ValueError('国家完整配置与已校验计划不符：'+name+'/'+case)
+    for name,wanted in plan['rendered_sha256'].items():
+        if not name.startswith('shadowrocket-') or name in ('shadowrocket-config','shadowrocket-ads'):continue
+        value=request(config,'/download/collection/'+name+'?target=URI',raw=True)
+        if digest(value)!=wanted:raise ValueError('国家订阅与已校验计划不符：'+name)
+    public=config['subscription']['public_url']
+    req=urllib.request.Request(public,headers={'User-Agent':'FlClash/0.8.99'})
+    with urllib.request.urlopen(req,timeout=45) as r:value=yaml.safe_load(r.read())
+    if value!=yaml.safe_load(request(config,'/api/file/clash',raw=True)):
+        raise ValueError('原统一订阅回读不一致')
+    stash_url=stash_refresh.update_url('stash',public)
+    req=urllib.request.Request(stash_url,headers={'User-Agent':'Mozilla/5.0'})
+    with urllib.request.urlopen(req,timeout=45) as r:raw=r.read().decode()
+    stash_refresh.check(raw,stash_url)
+    check_equivalent_profile(yaml.safe_load(raw),yaml.safe_load(stash_file(config,'stash','Mozilla/5.0')),'原统一 Stash 订阅')
+
+
+def publish(config,defer_commit=False,owner=None):
     plan=json.loads(PLAN.read_text())
     if plan.get('validation_version')!=VALIDATION_VERSION:raise ValueError('验收规则已更新，请重新 plan')
     if plan['inventory_sha256']!=digest(config):raise ValueError('资料已改变，请重新 plan')
@@ -320,7 +368,8 @@ def publish(config):
         ad_rules.verify_asset(config, snapshot)
     if any(get(config,x['kind'],x['name'])!=x['before'] for x in plan['items']):
         raise ValueError('线上配置已改变，请重新 plan')
-    journal=publication.begin(JOURNAL,config,digest)
+    if defer_commit and not owner:raise ValueError('延迟提交需要接入事务标识')
+    journal=publication.begin(JOURNAL,config,digest,owner=owner)
     attempted=journal['attempted']
     try:
         for item in plan['items']:
@@ -329,57 +378,33 @@ def publish(config):
             attempted.append(item);save(JOURNAL,journal)
             request(config,'/api/'+({'sub':'subs','collection':'collections','file':'files'}[item['kind']] if item['before'] is None else item['kind']+'/'+item['name']),item['after'],'POST' if item['before'] is None else 'PATCH')
             if get(config,item['kind'],item['name'])!=item['after']:raise ValueError('发布回读不一致')
-        import yaml
-        for fmt in ['clash','stash']:
-            raw=stash_file(config,fmt,'Stash/3.6.0') if fmt=='stash' else request(config,'/api/file/'+fmt,raw=True)
-            value=yaml.safe_load(raw)
-            check_profile(value)
-            ad_rules.check_profile(value, fmt)
-            if digest(value)!=plan['rendered_sha256'][fmt]:raise ValueError('线上输出与已校验计划不符')
-            if fmt=='stash':
-                for key,sha in check_stash_file_cases(config,fmt,value).items():
-                    if sha!=plan['rendered_sha256'][key]:raise ValueError('Stash 文件输出与已校验计划不符：'+key)
-        if digest(request(config,'/api/file/shadowrocket-config',raw=True))!=plan['rendered_sha256']['shadowrocket-config']:
-            raise ValueError('Shadowrocket 策略与已校验计划不符')
-        if 'shadowrocket-ads' in plan['rendered_sha256']:
-            raw=request(config,'/api/file/shadowrocket-ads',raw=True);check_sr_ads(raw)
-            if digest(raw)!=plan['rendered_sha256']['shadowrocket-ads']:raise ValueError('广告域名集已更新，请重新 plan')
-        for key,(target,ua) in DOWNLOAD_CASES.items():
-            if key not in plan['rendered_sha256']:continue
-            raw=request(config,'/download/collection/all?target='+target,raw=True,user_agent=ua)
-            refresh=stash_refresh.update_url('stash',config['subscription']['public_url']) if target=='Stash' else None
-            stash_refresh.check(raw,refresh)
-            value=yaml.safe_load(raw)
-            check_profile(value)
-            if digest(value)!=plan['rendered_sha256'][key]:raise ValueError('客户端导出与已校验计划不符：'+key)
-        for key,wanted in plan['rendered_sha256'].items():
-            if not key.startswith('country-profile:'):continue
-            _,name,case=key.split(':');target,ua=DOWNLOAD_CASES[case]
-            raw=request(config,'/download/collection/'+name+'?target='+target,raw=True,user_agent=ua)
-            stash_refresh.check(raw)
-            value=yaml.safe_load(raw)
-            check_profile(value)
-            if digest(value)!=wanted:raise ValueError('国家完整配置与已校验计划不符：'+name+'/'+case)
-        for name,wanted in plan['rendered_sha256'].items():
-            if not name.startswith('shadowrocket-') or name in ('shadowrocket-config','shadowrocket-ads'):continue
-            value=request(config,'/download/collection/'+name+'?target=URI',raw=True)
-            if digest(value)!=wanted:raise ValueError('国家订阅与已校验计划不符：'+name)
-        public=config['subscription']['public_url']
-        req=urllib.request.Request(public,headers={'User-Agent':'FlClash/0.8.99'})
-        with urllib.request.urlopen(req,timeout=45) as r:value=yaml.safe_load(r.read())
-        if value!=yaml.safe_load(request(config,'/api/file/clash',raw=True)):
-            raise ValueError('原统一订阅回读不一致')
-        stash_url=stash_refresh.update_url('stash',public)
-        req=urllib.request.Request(stash_url,headers={'User-Agent':'Mozilla/5.0'})
-        with urllib.request.urlopen(req,timeout=45) as r:raw=r.read().decode()
-        stash_refresh.check(raw,stash_url)
-        check_equivalent_profile(yaml.safe_load(raw),yaml.safe_load(stash_file(config,'stash','Mozilla/5.0')),'原统一 Stash 订阅')
+        verify_published(config,plan)
     except Exception:
-        publication.recover(JOURNAL,config,get,request,digest)
+        publication.recover(JOURNAL,config,get,request,digest,owner=owner)
         raise
+    if not defer_commit:
+        JOURNAL.unlink();PLAN.unlink()
+    return {'发布成功':True,'修改对象数':len(attempted),'原订阅回读':True,'代理进程重启':False,'待接入提交':defer_commit}
+
+
+def verify_committed_plan(config):
+    if not PLAN.exists():raise ValueError('接入发布计划缺失')
+    plan=json.loads(PLAN.read_text())
+    if plan.get('validation_version')!=VALIDATION_VERSION or plan['inventory_sha256']!=digest(config):
+        raise ValueError('接入发布计划与服务器资料不一致')
+    if any(get(config,item['kind'],item['name'])!=item['after'] for item in plan['items']):
+        raise ValueError('接入发布后线上对象发生变化，保留事务')
+    native_preflight(config)
+    verify_published(config,plan)
+    return {'verified':True}
+
+def commit_deferred(config,owner):
+    if not JOURNAL.exists():raise ValueError('接入发布事务缺失')
+    journal=json.loads(JOURNAL.read_text())
+    if journal.get('owner')!=owner or journal.get('backend_sha256')!=digest(config['subscription']['backend_url']):raise ValueError('接入发布归属或后端已变化')
+    verify_committed_plan(config)
     JOURNAL.unlink()
-    PLAN.unlink()
-    return {'发布成功':True,'修改对象数':len(attempted),'原订阅回读':True,'代理进程重启':False}
+    return {'committed':True}
 
 
 def sync_standard_rules(config):
@@ -449,6 +474,8 @@ def main():
     if args.config:os.environ['ARGOSBX_SERVERS_FILE']=str(Path(args.config).expanduser().resolve())
     try:
         config=read()
+        if args.command in ('plan','publish','recover') and (STATE/'onboarding-publication.json').exists():
+            raise ValueError('存在未完成新机接入发布；请先运行原 onboard.py install 继续恢复')
         from lease import coordinator
         with (coordinator(config) if args.command in ('plan','publish','recover') else contextlib.nullcontext()):
             if args.command=='check':result={'校验通过':True,'服务器':[s['id'] for s in config['servers']]}

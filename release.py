@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Allowlisted, reproducible source release; excludes inventory and local state."""
-import argparse,hashlib,io,json,tarfile
+import argparse,gzip,hashlib,io,json,tarfile
 from pathlib import Path
 ROOT=Path(__file__).resolve().parent
 FILES=['stash-compat.js','xhttp.py','routing_policy.py','ech.py','country_routes.py','probe.py','acceptance.py','listeners.py','inbounds.py','bootstrap.py','onboard.py','tunnels.py','binaries.json','lease.py','agent.py','domains.py','dns_policy.py','fleet.py','fleetctl.py','generate.py','publication.py','protocols.py','servers.py','storage.py','release.py','install.py','README.md','LICENSE','versions.json','ech-policy.js','region-processor.js','flclash-response-transformer.js']
 
-FILES += ['udp_buffers.py','diagnostics.py','certificates.py','cf_audit.py','cf_probe.py','cf_transport.py','dependency_audit.py']
+FILES += ['udp_buffers.py','diagnostics.py','certificates.py','cf_audit.py','cf_probe.py','cf_transport.py','dependency_audit.py','host_preflight.py']
 FILES += ['reality_compat.py','vmess_compat.py','ad_rules.py','ad_delivery.py']
 FILES += ['stash_refresh.py']
 FILES += ['standalone_alias_routes.py','standalone_install.py','standalone_routes.py',
@@ -17,7 +17,7 @@ def package(destination):
     hashes={f:hashlib.sha256((ROOT/f).read_bytes()).hexdigest() for f in files}
     manifest['files']=hashes;destination=Path(destination);destination.mkdir(parents=True,exist_ok=True)
     name='argosbx-fleet-'+manifest['version']+'.tar.gz';out=destination/name
-    with tarfile.open(out,'w:gz') as t:
+    with out.open('wb') as stream, gzip.GzipFile(filename='',mode='wb',fileobj=stream,mtime=0) as compressed, tarfile.open(fileobj=compressed,mode='w') as t:
         for name,body in [(f,(ROOT/f).read_bytes()) for f in files]+[('manifest.json',(json.dumps(manifest,indent=2)+'\n').encode())]:
             info=tarfile.TarInfo(name);info.size=len(body);info.mode=0o644;info.mtime=0;t.addfile(info,io.BytesIO(body))
     (destination/'SHA256SUMS').write_text(hashlib.sha256(out.read_bytes()).hexdigest()+'  '+out.name+'\n')

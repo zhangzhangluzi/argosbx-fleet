@@ -32,7 +32,7 @@ for fmt in ('clash','stash'):
     base=harden_config(base,fmt,hosts=node_hosts,tailscale=inventory.get('tailscale'))
     if ad_snapshot:
         ad_rules.use_provider(base,inventory,ad_snapshot)
-    health={'url':'https://www.gstatic.com/generate_204','interval':inventory.get('health',{}).get('interval',900),'tolerance':inventory.get('health',{}).get('tolerance',100),'lazy':True}
+    health={'url':'https://www.gstatic.com/generate_204','interval':inventory.get('health',{}).get('interval',1800),'tolerance':inventory.get('health',{}).get('tolerance',100),'lazy':True}
     if fmt == 'clash':
         base['unified-delay']=True
         health.update({'timeout':8000,'max-failed-times':3,'expected-status':'204'})
@@ -92,7 +92,7 @@ for code,label in countries.items():
                 if p.get('sni') or server['domains']['cf']:names.append(server['name']+'-T-'+label_name)
             else:
                 names += [node_name(label_name,{'ipv4':'IPv4','ipv6':'IPv6'}[f]) for f in node_families(ident,p,server)]
-    groups.append('地区-'+label+' = url-test, '+', '.join(names)+f", url=https://www.gstatic.com/generate_204, interval={inventory.get('health',{}).get('interval',900)}, timeout=5, tolerance={inventory.get('health',{}).get('tolerance',100)}")
+    groups.append('地区-'+label+' = url-test, '+', '.join(names)+f", url=https://www.gstatic.com/generate_204, interval={inventory.get('health',{}).get('interval',1800)}, timeout=5, tolerance={inventory.get('health',{}).get('tolerance',100)}")
 sr=sr[:start]+'\n'.join(groups)+'\n'+sr[end:]
 sr=sr.replace('PROTOCOL,UDP,UDP线路', 'PROTOCOL,UDP,日常线路')
 files.append({'name':'shadowrocket-config','displayName':'Shadowrocket 自动策略','source':'local','content':sr,'process':[]})

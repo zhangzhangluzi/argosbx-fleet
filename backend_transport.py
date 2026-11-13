@@ -64,7 +64,7 @@ def connection(config):
         try:
             for candidate in ssh_candidates(config,config['coordinator']):
                 args=candidate.copy();args[2]='none' # A stale multiplexed master cannot redirect a new forward.
-                args=args[:-1]+['-N','-T','-o','ExitOnForwardFailure=yes','-o','StreamLocalBindMask=0177',
+                args=args[:-1]+['-N','-T','-C','-o','ExitOnForwardFailure=yes','-o','StreamLocalBindMask=0177',
                                 '-L',str(path)+':127.0.0.1:'+str(settings['port']),args[-1]]
                 current=subprocess.Popen(args,stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
                 until=time.monotonic()+18

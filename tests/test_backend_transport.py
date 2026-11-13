@@ -144,6 +144,7 @@ class RelayLifecycleTests(unittest.TestCase):
                 self.assertEqual(transport.request(config,'/api/subs'),{'ok':True})
                 self.assertEqual(created['mode'],0o700)
                 self.assertIn('StreamLocalBindMask=0177',created['process'].args)
+                self.assertIn('-C',created['process'].args)
                 self.assertEqual(created['process'].args[2],'none')
             self.assertFalse(created['directory'].exists())
             self.assertTrue(created['process'].dead)

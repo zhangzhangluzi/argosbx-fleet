@@ -89,6 +89,18 @@ def validate(data):
             if not onboarding['certificate_host'].endswith('.'+onboarding['zone']):raise ValueError('证书域名不在所选 zone 下')
     for key in ('backend_url', 'public_url'):
         url(data['subscription'][key], key)
+    backend_relay=data['subscription'].get('backend_relay')
+    if backend_relay is not None:
+        if (not isinstance(backend_relay,dict) or not {'port'}<=set(backend_relay) or set(backend_relay)-{'port','jump_server'}
+                or type(backend_relay['port']) is not int or not 1<=backend_relay['port']<=65535
+                or urlsplit(data['subscription']['backend_url']).query):
+            raise ValueError('订阅管理 SSH 中继配置无效')
+        coordinator=data.get('coordinator')
+        if not isinstance(coordinator,str) or not any(s['id']==coordinator and s.get('status','active')=='active' for s in data['servers']):
+            raise ValueError('订阅管理 SSH 中继需要已启用的协调服务器')
+        jump=backend_relay.get('jump_server')
+        if jump is not None and (not isinstance(jump,str) or jump==coordinator or not any(s['id']==jump and s.get('status','active')=='active' for s in data['servers'])):
+            raise ValueError('订阅管理 SSH 跳板必须是另一台已启用服务器')
     if 'ad_rules_snapshot' in data['subscription']:
         check(data['subscription']['ad_rules_snapshot'], r'[^\r\n]+', 'subscription.ad_rules_snapshot')
     cache_keys = [s['subscription']['cache_key'] for s in data['servers'] if 'cache_key' in s['subscription']]

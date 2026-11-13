@@ -20,12 +20,14 @@ flowchart LR
 从 GitHub Release 下载版本包和 SHA256SUMS，先校验再安装。[下载维护包](https://github.com/zhangzhangluzi/argosbx-fleet/releases/latest)
 ```sh
 sha256sum -c SHA256SUMS &&
-  tar -xzf argosbx-fleet-v1.2.37.tar.gz install.py &&
-  python3 install.py argosbx-fleet-v1.2.37.tar.gz --sha256 "$(cut -d ' ' -f1 SHA256SUMS)"
+  tar -xzf argosbx-fleet-v1.2.38.tar.gz install.py &&
+  python3 install.py argosbx-fleet-v1.2.38.tar.gz --sha256 "$(cut -d ' ' -f1 SHA256SUMS)"
 ```
 安装到 `/opt/argosbx-fleet/<版本>`，原子更新 `current` 符号链接。同一版本内容不可覆盖。升级使用相同命令；数据与凭据不在发布包内。
 ## 配置入口
 复制 `templates/servers.example.json` 到私有路径，设置权限 0600；通过 `ARGOSBX_SERVERS_FILE` 指定。`ARGOSBX_WORKSPACE` 用于解析相对 SSH 路径；`ARGOSBX_STATE` 为计划和恢复日志目录。设置 `coordinator` 为运行 Sub-Store 的服务器 ID，使用该机原生 `flock` 排除跨工作站同时发布。每次 Sub-Store 请求前后检查锁连接；检测到连接断开就停止写入并保留恢复日志。它不提供服务端数据库 fencing，已在途的请求仍须回读确认。
+
+如果 Sub-Store 后端仅监听协调服务器的回环端口，可在私有资料的 `subscription` 中设置 `"backend_relay":{"port":3001}`。发布、恢复和新机接入时，控制端通过受主机指纹校验保护的 SSH 连接临时转发到该回环端口；本地只创建私有 Unix 套接字，结束即清理。还可在同一对象中指定 `"jump_server":"jp"`（填另一台已启用服务器的 ID）：协调锁及中继会先尝试直连，再通过该服务器转发 SSH；两端 SSH 主机指纹和本地密钥均独立校验，控制端不会把私钥上传跳板。跳板只转发管理连接，不改变 Cloudflare 管理请求的美国出口或客户端节点。中继失败会停止管理写入，不自动回退到公网。客户端原有 HTTPS 订阅地址不变，发布验收仍从公网读取，遇到暂时性的读取超时会有限重试。
 当资料文件放在工作区的 `.vpn-deploy/servers.json` 且未设置 `ARGOSBX_WORKSPACE` 时，相对 SSH 和 Cloudflare 私有文件路径以该工作区为准，执行命令的当前目录不影响解析；显式设置的工作区仍优先。
 初次接管现有安装：向各 VPS `agent.py adopt` 标准输入传递 `{server_id, services}`；services 是原生配置完整路径到 systemd unit 的映射。程序读取实际端口、TLS 参数、凭据和源节点，校验两个内核并确认接管前后正式节点等价，再保存 `/etc/argosbx-fleet/server.json`。同类协议存在多个入站时拒绝自动猜测；需要先明确映射。
 ```sh

@@ -8,11 +8,15 @@ from fleet import read,servers,ssh_args,STATE,DEFAULT
 from storage import save,lock
 from domains import Cloudflare
 import tunnels
+import backend_transport
 ROOT=Path(__file__).resolve().parent
 PUBLICATION=STATE/'onboarding-publication.json'
 
 def command(config,ident,args,payload=None,timeout=600):
-    proc=subprocess.run(ssh_args(ident,config)+[shlex.join(args)],input=payload,text=True,capture_output=True,timeout=timeout)
+    from lease import reachable_ssh_args
+    jump=(config.get('subscription',{}).get('backend_relay') or {}).get('jump_server')
+    via=reachable_ssh_args(config,ident) if jump else ssh_args(ident,config)
+    proc=subprocess.run(via+[shlex.join(args)],input=payload,text=True,capture_output=True,timeout=timeout)
     if proc.returncode:raise RuntimeError(ident+'：远程初始化失败；'+proc.stderr[-450:])
     return proc.stdout
 
@@ -100,14 +104,14 @@ def finish_publication(config,journal):
         countries=publisher.sync_retired_countries(config)
         if rules['status']=='failed' or countries['status'].startswith('failed'):
             raise RuntimeError('新机已发布，但独立规则或国家路由验收失败；保留事务，重试原接入命令')
-        with lock(STATE/'publisher.lock'),coordinator(config,journal['id']):
+        with lock(STATE/'publisher.lock'),coordinator(config,journal['id']),backend_transport.connection(config):
             marker(config,journal['id'])
             publisher.verify_committed_plan(config)
             journal['phase']='done';save(PUBLICATION,journal)
             marker(config,journal['id'],remove=True)
             publisher.PLAN.unlink(missing_ok=True);PUBLICATION.unlink()
         return {'recovered':True,'published':True,'standard_rules':rules,'countries':countries}
-    with lock(STATE/'publisher.lock'),coordinator(config,journal['id']):
+    with lock(STATE/'publisher.lock'),coordinator(config,journal['id']),backend_transport.connection(config):
         marker(config,journal['id'])
         if publisher.PLAN.exists():publisher.verify_committed_plan(config)
         marker(config,journal['id'],remove=True)
@@ -128,7 +132,7 @@ def resume_publication(config,ident):
         return finish_publication(config,journal)
     if journal['phase'] not in ('prepared','staging','publishing','published','committing','rollback'):
         raise ValueError('接入事务阶段无效，保留现场')
-    with lock(STATE/'publisher.lock'),coordinator(config,journal['id']):
+    with lock(STATE/'publisher.lock'),coordinator(config,journal['id']),backend_transport.connection(config):
         marker(config,journal['id'])
         phase=journal['phase']
         other=(phase=='prepared' and (publisher.JOURNAL.exists() or publisher.STAGING.exists())) or (phase=='staging' and publisher.JOURNAL.exists())
@@ -159,7 +163,7 @@ def publish_server(config,ident):
              'before':copy.deepcopy(config),'before_sha256':publisher.digest(config),'after_sha256':publisher.digest(candidate)}
     if PUBLICATION.exists() or publisher.JOURNAL.exists() or publisher.STAGING.exists():raise ValueError('已有未完成发布或新机接入事务')
     save(PUBLICATION,journal)
-    with lock(STATE/'publisher.lock'),coordinator(config,journal['id']):
+    with lock(STATE/'publisher.lock'),coordinator(config,journal['id']),backend_transport.connection(config):
         marker(config,journal['id'])
         if publisher.JOURNAL.exists() or publisher.STAGING.exists():raise ValueError('已有未完成发布事务，保留接入现场')
         journal['phase']='staging';save(PUBLICATION,journal)

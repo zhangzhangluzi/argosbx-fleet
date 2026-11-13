@@ -16,26 +16,59 @@ def ensure_owned():
     if proc is not None and proc.poll() is not None:
         raise RuntimeError('发布协调锁连接已中断；停止写入，保留事务日志以待恢复')
 
+def ssh_candidates(config,ident):
+    """Prefer direct SSH; an optional jump still verifies both host identities."""
+    direct=ssh_args(ident,config)
+    yield direct
+    jump=(config.get('subscription',{}).get('backend_relay') or {}).get('jump_server')
+    if jump and ident==config.get('coordinator') and jump!=ident:
+        via=ssh_args(jump,config);via[2]='none'
+        target=direct.copy();target[2]='none'
+        proxy=shlex.join(via[:-1]+['-W','%h:%p',via[-1]])
+        yield target[:-1]+['-o','ProxyCommand='+proxy,target[-1]]
+
+def reachable_ssh_args(config,ident):
+    """Choose a reachable path before a write; never replay the write itself."""
+    candidates=list(ssh_candidates(config,ident))
+    if len(candidates)==1:return candidates[0]
+    for candidate in candidates:
+        try:
+            probe=subprocess.run(candidate+['true'],capture_output=True,timeout=15)
+            if probe.returncode==0:return candidate
+        except (OSError,subprocess.SubprocessError):
+            pass
+    raise RuntimeError('协调服务器 SSH 直连与跳板均不可用')
+
+def close_process(proc):
+    try:proc.stdin.close()
+    except (BrokenPipeError,AttributeError):pass
+    try:proc.wait(timeout=10)
+    except subprocess.TimeoutExpired:proc.terminate();proc.wait(timeout=5)
+
 @contextlib.contextmanager
 def coordinator(config,onboarding_id=None):
     ident=config.get('coordinator')
     if not ident:raise ValueError('必须配置 coordinator，防止跨机器并发发布')
-    args=ssh_args(ident,config)
-    args=args[:-1]+['-o','ServerAliveInterval=5','-o','ServerAliveCountMax=2',args[-1]]
     check=marker_check('/etc/argosbx-fleet/onboarding-publication.id',onboarding_id)
     script='test ! -e /etc/argosbx-fleet/ad-delivery-journal.json || exit 73; '+check+' || exit 74; printf READY; cat >/dev/null'
-    proc=subprocess.Popen(args+['flock -n /run/argosbx-publisher.lock sh -c '+shlex.quote(script)],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL)
+    proc=None
+    for candidate in ssh_candidates(config,ident):
+        args=candidate[:-1]+['-o','ServerAliveInterval=5','-o','ServerAliveCountMax=2',candidate[-1]]
+        current=subprocess.Popen(args+['flock -n /run/argosbx-publisher.lock sh -c '+shlex.quote(script)],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL)
+        try:ready,_,_=select.select([current.stdout],[],[],15)
+        except BaseException:
+            close_process(current)
+            raise
+        if ready and current.stdout.read(5)==b'READY':
+            proc=current;break
+        close_process(current)
+    if proc is None:raise RuntimeError('发布协调锁不可用：已有发布、待恢复事务或 SSH 不通')
     token=None
     try:
-        ready,_,_=select.select([proc.stdout],[],[],15)
-        if not ready or proc.stdout.read(5)!=b'READY':raise RuntimeError('发布协调锁不可用：已有发布、待恢复事务或 SSH 不通')
         token=_active.set(proc)
         ensure_owned()
         yield
         ensure_owned()
     finally:
         if token is not None:_active.reset(token)
-        try:proc.stdin.close()
-        except BrokenPipeError:pass
-        try:proc.wait(timeout=10)
-        except subprocess.TimeoutExpired:proc.terminate();proc.wait(timeout=5)
+        close_process(proc)

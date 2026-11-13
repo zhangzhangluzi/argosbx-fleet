@@ -46,6 +46,9 @@ def generate(config=None):
 
 
 def request(config, path, value=None, method=None, raw=False, user_agent='FlClash/0.8.99'):
+    import backend_transport
+    if backend_transport.active(config):
+        return backend_transport.request(config,path,value,method,raw,user_agent)
     ensure_owned()
     base = config['subscription']['backend_url'].rstrip('/')
     req = urllib.request.Request(base+path, data=None if value is None else json.dumps(value).encode(),
@@ -308,6 +311,20 @@ def check_profile(value):
             raise ValueError('DNS 规则集引用无效')
 
 
+def read_public(url,user_agent,timeout=45):
+    """Retry only idempotent public reads; keep HTTP errors visible."""
+    for attempt in range(3):
+        request=urllib.request.Request(url,headers={'User-Agent':user_agent})
+        try:
+            with urllib.request.urlopen(request,timeout=timeout) as response:
+                return response.read().decode()
+        except urllib.error.HTTPError:
+            raise
+        except (OSError,urllib.error.URLError):
+            if attempt==2:raise
+            time.sleep(.5)
+
+
 def verify_published(config,plan):
     import yaml
     for fmt in ['clash','stash']:
@@ -345,13 +362,11 @@ def verify_published(config,plan):
         value=request(config,'/download/collection/'+name+'?target=URI',raw=True)
         if digest(value)!=wanted:raise ValueError('国家订阅与已校验计划不符：'+name)
     public=config['subscription']['public_url']
-    req=urllib.request.Request(public,headers={'User-Agent':'FlClash/0.8.99'})
-    with urllib.request.urlopen(req,timeout=45) as r:value=yaml.safe_load(r.read())
+    value=yaml.safe_load(read_public(public,'FlClash/0.8.99'))
     if value!=yaml.safe_load(request(config,'/api/file/clash',raw=True)):
         raise ValueError('原统一订阅回读不一致')
     stash_url=stash_refresh.update_url('stash',public)
-    req=urllib.request.Request(stash_url,headers={'User-Agent':'Mozilla/5.0'})
-    with urllib.request.urlopen(req,timeout=45) as r:raw=r.read().decode()
+    raw=read_public(stash_url,'Mozilla/5.0')
     stash_refresh.check(raw,stash_url)
     check_equivalent_profile(yaml.safe_load(raw),yaml.safe_load(stash_file(config,'stash','Mozilla/5.0')),'原统一 Stash 订阅')
 
@@ -410,10 +425,12 @@ def commit_deferred(config,owner):
 def sync_standard_rules(config):
     """Run after releasing the publication lease; the remote command locks itself."""
     from fleet import ssh_args
+    from lease import reachable_ssh_args
     ident=config.get('coordinator')
     if not ident:return {'status':'not_configured'}
     try:
-        proc=subprocess.run(ssh_args(ident,config)+[
+        jump=(config.get('subscription',{}).get('backend_relay') or {}).get('jump_server')
+        proc=subprocess.run((reachable_ssh_args(config,ident) if jump else ssh_args(ident,config))+[
             'python3 -B /opt/argosbx-fleet/current/standard_rule_source.py refresh --if-configured'],
             text=True,capture_output=True,timeout=150)
         if proc.returncode:return {'status':'failed'}
@@ -421,7 +438,7 @@ def sync_standard_rules(config):
         if value.get('configured') is False:return {'status':'not_configured'}
         if value.get('configured') is True and value.get('verified') is True:
             return {'status':'verified','updated':value.get('updated',0)}
-    except (OSError,ValueError,TypeError,subprocess.SubprocessError):
+    except (OSError,ValueError,RuntimeError,TypeError,subprocess.SubprocessError):
         pass
     return {'status':'failed'}
 
@@ -429,11 +446,12 @@ def sync_standard_rules(config):
 def sync_retired_countries(config):
     """Retire only countries without an active server and verify the old URL."""
     from fleet import ssh_args
+    from lease import reachable_ssh_args
     active={s['country'] for s in config['servers'] if s.get('status','active')=='active'}
     retired=sorted({s['country'] for s in config['servers'] if s.get('status','active')=='pending'}-active)
     ident=config.get('coordinator')
     if not ident:return {'status':'not_configured'}
-    args=ssh_args(ident,config);script='/opt/argosbx-fleet/current/country_routes.py '
+    args=None;script='/opt/argosbx-fleet/current/country_routes.py '
     def command(action,body=None):
         proc=subprocess.run(args+['python3 -B '+script+action],input=None if body is None else json.dumps(body),
                             text=True,capture_output=True,timeout=45)
@@ -441,6 +459,8 @@ def sync_retired_countries(config):
         return json.loads(proc.stdout)
     changed=False
     try:
+        jump=(config.get('subscription',{}).get('backend_relay') or {}).get('jump_server')
+        args=reachable_ssh_args(config,ident) if jump else ssh_args(ident,config)
         staged=command('retired-stage',{'countries':retired});changed=staged.get('changed') is True
         parsed=urlsplit(config['subscription']['public_url'])
         base=[(k,v) for k,v in parse_qsl(parsed.query,keep_blank_values=True) if k!='format']
@@ -477,7 +497,9 @@ def main():
         if args.command in ('plan','publish','recover') and (STATE/'onboarding-publication.json').exists():
             raise ValueError('存在未完成新机接入发布；请先运行原 onboard.py install 继续恢复')
         from lease import coordinator
-        with (coordinator(config) if args.command in ('plan','publish','recover') else contextlib.nullcontext()):
+        import backend_transport
+        with (coordinator(config) if args.command in ('plan','publish','recover') else contextlib.nullcontext()), \
+             (backend_transport.connection(config) if args.command in ('generate','plan','publish','recover') else contextlib.nullcontext()):
             if args.command=='check':result={'校验通过':True,'服务器':[s['id'] for s in config['servers']]}
             elif args.command=='generate':result={'生成成功':True,'文件':str(STATE/'substore-payload.json'),'订阅源数量':len(generate(config)['subscriptions'])}
             elif args.command=='plan':result=summarize(prepare(config))

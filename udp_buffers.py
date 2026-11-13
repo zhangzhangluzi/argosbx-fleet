@@ -20,7 +20,8 @@ HOME = Path('/etc/argosbx-fleet')
 JOURNAL = HOME / 'udp-buffers-journal.json'
 RECEIPT = HOME / 'udp-buffers-receipt.json'
 SERVICES = {'sb': 'sing-box', 'xr': 'xray',
-            'argosbx-reality443': 'xray', 'argosbx-xhttp': 'xray'}
+            'argosbx-reality443': 'xray', 'argosbx-xhttp': 'xray',
+            'argosbx-hy2-udp443': 'xray'}
 
 
 def identity(pid):

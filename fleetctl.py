@@ -12,10 +12,21 @@ from storage import save,lock
 from domains import Cloudflare,build,stage,recover
 
 def remote(config,server,command,payload=None,allow_restart=False):
-    args=ssh_args(server,config)+['python3 -B /opt/argosbx-fleet/current/agent.py '+command+(' --allow-restart' if allow_restart else '')]
-    p=subprocess.run(args,input=json.dumps(payload) if payload is not None else '',text=True,capture_output=True,timeout=180)
-    if p.returncode:raise RuntimeError(server+': '+p.stderr.strip()[:400])
-    return json.loads(p.stdout)
+    # Only an inspection may be repeated after a failed transport. A write with
+    # an unknown outcome must be recovered through its transaction journal.
+    if command=='inspect':
+        from lease import ssh_candidates
+        candidates=list(ssh_candidates(config,server))
+    else:candidates=[ssh_args(server,config)]
+    for index,candidate in enumerate(candidates):
+        args=candidate+['python3 -B /opt/argosbx-fleet/current/agent.py '+command+(' --allow-restart' if allow_restart else '')]
+        try:p=subprocess.run(args,input=json.dumps(payload) if payload is not None else '',text=True,capture_output=True,timeout=180)
+        except subprocess.TimeoutExpired:
+            if index+1<len(candidates):continue
+            raise
+        if p.returncode==255 and index+1<len(candidates):continue
+        if p.returncode:raise RuntimeError(server+': '+p.stderr.strip()[:400])
+        return json.loads(p.stdout)
 
 def main():
     p=argparse.ArgumentParser();p.add_argument('command',choices=['inspect','protocol-plan','protocol-apply','protocol-recover','domain-plan','domain-stage','domain-commit','domain-recover','xhttp-stage','xhttp-commit','xhttp-recover','diagnose','certificate-audit','cf-audit','dependency-audit']);p.add_argument('--config');p.add_argument('--server',required=True);p.add_argument('--allow-restart',action='store_true');p.add_argument('--observer');p.add_argument('--output');checks=p.add_mutually_exclusive_group();checks.add_argument('--verify-writes',action='store_true');checks.add_argument('--recover-writes',action='store_true');a=p.parse_args()

@@ -12,6 +12,7 @@ import time
 from urllib.parse import urlsplit
 import urllib.error
 import urllib.request
+import urllib.error
 
 from storage import save
 
@@ -170,8 +171,11 @@ def load(config):
     path = config['subscription'].get('ad_rules_snapshot')
     if path == MANAGED_SNAPSHOT:
         from dns_policy import console_routes
+        import backend_transport
         url = config['subscription']['backend_url'].rstrip('/') + '/api/file/' + STATE_FILE
-        state = json.loads(get(url, 'application/json'))
+        data = (backend_transport.request(config,'/api/file/'+STATE_FILE,raw=True).encode()
+                if backend_transport.active(config) else get(url, 'application/json'))
+        state = json.loads(data)
         if state['console_routes'] != console_routes():
             raise ValueError('广告例外与订阅服务器版本不同，请先同步维护代码')
         return validate(state['snapshot'])
@@ -191,6 +195,7 @@ def asset_url(config, snapshot):
 
 
 def verify_asset(config, snapshot):
+    # get() already bounds transient network retries; do not multiply them.
     body = get(asset_url(config, snapshot), 'application/octet-stream')
     if sha(body) != snapshot['mrs_sha256']:
         raise ValueError('已发布的广告 MRS 与候选快照不同')

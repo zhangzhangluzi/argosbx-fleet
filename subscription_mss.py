@@ -115,6 +115,7 @@ def stage():
     save(JOURNAL,{'rule_sha256':digest(RULE_SOURCE.read_bytes()),'unit_sha256':digest(UNIT_SOURCE.read_bytes()),'protected':baseline})
     try:
         run(['systemd-run','--quiet','--unit=argosbx-sub-mss-rollback','--on-active=240s','--collect',
+             '--property=Restart=on-failure','--property=RestartSec=10s',
              '/usr/bin/python3','-B',str(Path(__file__).resolve()),'recover'])
         if run(['systemctl','is-active','--quiet',TIMER],check=False).returncode:raise RuntimeError('自动回滚定时器未启动')
         create(RULE,RULE_SOURCE.read_bytes());create(UNIT,UNIT_SOURCE.read_bytes())
@@ -136,7 +137,7 @@ def commit():
 
 def main():
     p=argparse.ArgumentParser();p.add_argument('action',choices=('stage','commit','recover','verify'));a=p.parse_args()
-    with lock(LOCK):print(json.dumps(globals()[a.action](),ensure_ascii=False))
+    with lock(LOCK,timeout=30 if a.action=='recover' else 0):print(json.dumps(globals()[a.action](),ensure_ascii=False))
 
 if __name__=='__main__':
     try:main()

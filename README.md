@@ -20,8 +20,8 @@ flowchart LR
 从 GitHub Release 下载版本包和 SHA256SUMS，先校验再安装。[下载维护包](https://github.com/zhangzhangluzi/argosbx-fleet/releases/latest)
 ```sh
 sha256sum -c SHA256SUMS &&
-  tar -xzf argosbx-fleet-v1.2.40.tar.gz install.py &&
-  python3 install.py argosbx-fleet-v1.2.40.tar.gz --sha256 "$(cut -d ' ' -f1 SHA256SUMS)"
+  tar -xzf argosbx-fleet-v1.2.41.tar.gz install.py &&
+  python3 install.py argosbx-fleet-v1.2.41.tar.gz --sha256 "$(cut -d ' ' -f1 SHA256SUMS)"
 ```
 安装到 `/opt/argosbx-fleet/<版本>`，原子更新 `current` 符号链接。同一版本内容不可覆盖。升级使用相同命令；数据与凭据不在发布包内。
 ## 配置入口
@@ -31,6 +31,8 @@ sha256sum -c SHA256SUMS &&
 当资料文件放在工作区的 `.vpn-deploy/servers.json` 且未设置 `ARGOSBX_WORKSPACE` 时，相对 SSH 和 Cloudflare 私有文件路径以该工作区为准，执行命令的当前目录不影响解析；显式设置的工作区仍优先。
 
 如果订阅服务器出现大响应停滞，先在独立客户端比较默认 TCP 分段与较小分段。确认有效后，可在仅由 Caddy 监听 TCP 8443 的订阅服务器执行 `python3 subscription_mss.py stage`；规则只调整新建 IPv4 连接的 MSS，不影响现有连接或 UDP。外部客户端验证通过后执行 `commit`，失败执行 `recover`；若未提交，4 分钟后自动回滚。`verify` 可只读检查持久服务和规则，代理内核不会重启。该规则不能修复 Cloudflare 边缘到客户端的独立网络故障。
+
+`python3 country_routes.py raw-compress` 为已存在的原始 `/download/collection/all` 订阅入口按客户端请求启用 gzip，其他后台路径不变；外部回读通过后执行 `raw-compression-finish`，失败执行 `raw-compression-recover`。未完成验收时 4 分钟后自动恢复。
 初次接管现有安装：向各 VPS `agent.py adopt` 标准输入传递 `{server_id, services}`；services 是原生配置完整路径到 systemd unit 的映射。程序读取实际端口、TLS 参数、凭据和源节点，校验两个内核并确认接管前后正式节点等价，再保存 `/etc/argosbx-fleet/server.json`。同类协议存在多个入站时拒绝自动猜测；需要先明确映射。
 ```sh
 python3 fleetctl.py inspect --server jp

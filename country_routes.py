@@ -4,6 +4,8 @@ from pathlib import Path
 from storage import atomic,save
 
 COMPRESSION_JOURNAL=Path('/etc/argosbx-fleet/share-compression-journal.json')
+RAW_COMPRESSION_JOURNAL=Path('/etc/argosbx-fleet/raw-compression-journal.json')
+RAW_COMPRESSION_TIMER='argosbx-raw-compression-rollback.timer'
 AD_JOURNAL = Path('/etc/argosbx-fleet/ad-route-journal.json')
 RETIRED_JOURNAL = Path('/etc/argosbx-fleet/retired-country-journal.json')
 AD_ROOT = Path('/srv/argosbx/ad-rules')
@@ -57,6 +59,49 @@ def stage_import(render, path, main, journal):
 
 def compression_upgrade(path=Path('/etc/caddy-sub/argosbx.caddy'),main=Path('/etc/caddy-sub/Caddyfile'),journal=COMPRESSION_JOURNAL):
     return stage_import(compression_render, path, main, journal)
+
+def raw_compression_render(text):
+    matches=re.findall(r'(?m)^[ \t]*@substore_admin path ([^\n]+)$',text)
+    paths=matches[0].split() if len(matches)==1 else []
+    private=[x[:-2] for x in paths if re.fullmatch(r'/[A-Za-z0-9_-]{20,}/\*',x)]
+    if len(private)!=1:raise ValueError('无法唯一确认原订阅后台路径')
+    pattern=re.compile(r'(?m)^([ \t]*)handle @substore_admin \{\n((?:[^\r\n{}]*\n)*)\1\}')
+    blocks=list(pattern.finditer(text))
+    if len(blocks)!=1:raise ValueError('无法唯一确认原订阅后台路由')
+    match=blocks[0];body=match.group(2);indent=match.group(1)+' '
+    definition=indent+'@substore_raw_download path '+private[0]+'/download/collection/all\n'
+    encoding=indent+'encode @substore_raw_download gzip\n'
+    if text.count('@substore_raw_download'):
+        if text.count('@substore_raw_download')==2 and body.count(definition)==1 and body.count(encoding)==1:return text
+        raise ValueError('原订阅压缩作用域存在冲突')
+    if body.count('reverse_proxy 127.0.0.1:3001')!=1 or 'Cache-Control "no-store"' not in body:
+        raise ValueError('原订阅后端或缓存策略不匹配')
+    if re.search(r'(?m)^\s*encode\s+',body):raise ValueError('原订阅已有压缩规则，保留原配置')
+    return text[:match.start(2)]+definition+encoding+text[match.start(2):]
+
+def raw_compression_finish(restore=False,journal=RAW_COMPRESSION_JOURNAL):
+    result=compression_finish(restore=restore,journal=journal)
+    subprocess.run(['systemctl','stop',RAW_COMPRESSION_TIMER],capture_output=True,timeout=15)
+    return result
+
+def raw_compression_upgrade(path=Path('/etc/caddy-sub/argosbx.caddy'),main=Path('/etc/caddy-sub/Caddyfile'),journal=RAW_COMPRESSION_JOURNAL):
+    if journal.exists():raise ValueError('原订阅压缩有未完成事务')
+    if any(p!=journal for p in journal.parent.glob('*journal.json')):
+        raise ValueError('存在其他未完成的维护事务')
+    # Schedule recovery before the first write; a disconnect cannot strand a staged edit.
+    subprocess.run(['systemd-run','--quiet','--unit=argosbx-raw-compression-rollback','--on-active=240s','--collect',
+                    '--property=Restart=on-failure','--property=RestartSec=10s',
+                    '/usr/bin/python3','-B',str(Path(__file__).resolve()),'raw-compression-recover'],
+                   check=True,capture_output=True,timeout=20)
+    try:
+        active=subprocess.run(['systemctl','is-active','--quiet',RAW_COMPRESSION_TIMER],capture_output=True,timeout=15)
+        if active.returncode:raise ValueError('自动回滚定时器未启动')
+        result=stage_import(raw_compression_render,path,main,journal)
+        if not result['changed']:subprocess.run(['systemctl','stop',RAW_COMPRESSION_TIMER],capture_output=True,timeout=15)
+        return {**result,'rollback_seconds':240 if result['changed'] else 0}
+    except BaseException:
+        if not journal.exists():subprocess.run(['systemctl','stop',RAW_COMPRESSION_TIMER],capture_output=True,timeout=15)
+        raise
 
 
 def ad_render(text):
@@ -250,10 +295,12 @@ if __name__=='__main__':
     import argparse
     import sys
     from storage import lock
-    parser=argparse.ArgumentParser();parser.add_argument('command',choices=['upgrade','finish','recover','compress','compression-finish','compression-recover','ads-stage','ads-finish','ads-recover','retired-stage','retired-finish','retired-recover']);command=parser.parse_args().command
-    with lock('/etc/argosbx-fleet/agent.lock'):
+    parser=argparse.ArgumentParser();parser.add_argument('command',choices=['upgrade','finish','recover','compress','compression-finish','compression-recover','raw-compress','raw-compression-finish','raw-compression-recover','ads-stage','ads-finish','ads-recover','retired-stage','retired-finish','retired-recover']);command=parser.parse_args().command
+    with lock('/etc/argosbx-fleet/agent.lock',timeout=30 if command=='raw-compression-recover' else 0):
         if command=='retired-stage':result=retired_stage(json.load(sys.stdin)['countries'])
         elif command.startswith('retired-'):result=retired_finish(command=='retired-recover')
+        elif command=='raw-compress':result=raw_compression_upgrade()
+        elif command.startswith('raw-compression-'):result=raw_compression_finish(command=='raw-compression-recover')
         elif command=='compress':result=compression_upgrade()
         elif command.startswith('compression-'):result=compression_finish(command=='compression-recover')
         elif command=='ads-stage':result=stage_ads(json.load(sys.stdin))

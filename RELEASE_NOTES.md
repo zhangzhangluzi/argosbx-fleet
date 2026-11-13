@@ -1,3 +1,7 @@
+# ArgoSBX Fleet v1.2.41
+
+原始统一下载入口按客户端 `Accept-Encoding` 协商 gzip；后台 API、其他路径和原链接保持不变。改动支持 Caddy 热加载、独立回读及超时自动恢复。
+
 # ArgoSBX Fleet v1.2.40
 
 为 TCP 8443 订阅连接提供可选、可恢复的 IPv4 MSS 限制；仅在实测验证后启用，新连接生效，现有代理和 UDP 不变。发布时有自动回滚窗口，验收后持久化。

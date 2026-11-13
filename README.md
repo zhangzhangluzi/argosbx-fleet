@@ -234,6 +234,7 @@ python3 fleetctl.py cf-audit --config /private/servers.json --server us --recove
 ## v1.2.16：固定 CF 管理出口
 私有 inventory 增加 `"cloudflare": {"token_file":"/private/cloudflare.token", "management_server":"us"}`，其中 ID 必须对应已启用且有 IPv4 的服务器。`fleetctl` 的审计、DNS／域名迁移、隧道管理和 `onboard` 的域名发现／初始化统一使用该出口。没有配置此字段的旧安装保持原直接请求行为；配置后通道失败会停止，不降级为本机请求。
 控制机使用已有可信 SSH 密钥与 known_hosts 创建独立、短期本地转发，仅监听 `127.0.0.1` 随机端口，不复用可能残留转发的共享 SSH master。CF API 的 A 记录由出口机器解析，控制机到 `api.cloudflare.com` 的 TLS 完整穿过 SSH 通道；服务端不会接收明文管理令牌或保存令牌文件。请求不跟随重定向，不能借此转发到任意其他站点。启动时先访问同通道无认证的 `/cdn-cgi/trace`，源 IPv4 必须与 inventory 中该机器 IPv4 相同，随后才发送令牌。审计的 `management_transport` 和 `source_ip_filter` 分别给出实测出口与白名单匹配结果。
+在同一 SSH 转发内复用已通过来源验证的 TLS 连接；连接关闭后先重新核验来源，再发送认证请求。无认证预检单次超时为 8 秒，失败后可尝试出口解析的其他 Cloudflare 地址；只读 GET 在连接故障时最多重试一次，写请求结果未知时不自动重放，沿用既有事务回读与恢复流程。此优化不改变实际管理出口、证书校验、VPN 节点或订阅公网链路，也不保证解决客户端到 Cloudflare 边缘的网络波动。
 应先升级并验收该通道，再在 Cloudflare 控制台将现有管理令牌的允许来源收窄至出口 IPv4 的 `/32`。保留原权限和令牌值；刷新绑定策略快照后，从允许出口验证真实资源读写、从另一台独立机器验证资源请求被拒绝。Token Verify 接口不受 IP 过滤约束，不能用它验证拒绝效果。只约束管理令牌，不改变 cloudflared 的独立连接凭据、代理节点或订阅。程序退出时清理自有 SSH 进程；临时转发不对局域网或公网开放。
 
 ## v1.2.18：一键依赖验收

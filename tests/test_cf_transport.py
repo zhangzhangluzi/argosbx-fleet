@@ -34,6 +34,7 @@ class TransportTests(unittest.TestCase):
 
     def test_verified_source_precedes_authorization_and_forward_is_loopback_only(self):
         proc,ready,reservation,_=self.launch(None)
+        self.transport.connection=Mock();self.transport.connection.sock=Mock()
         raw=Mock(side_effect=[(200,b'ip=192.0.2.10\n'),(200,b'{"success":true}')])
         with patch.object(self.transport,'resolve',return_value=['1.1.1.1']),patch.object(cf_transport.socket,'socket',return_value=reservation),patch.object(cf_transport.socket,'create_connection',return_value=ready),patch.object(cf_transport.subprocess,'Popen',return_value=proc) as popen,patch.object(self.transport,'_request',raw):
             self.transport.request('/client/v4/zones',headers={'Authorization':'Bearer fixture-secret'})
@@ -50,6 +51,42 @@ class TransportTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError,'未发送管理令牌'):
                 self.transport.request('/client/v4/zones',headers={'Authorization':'Bearer fixture-secret'})
         self.assertEqual(request.call_count,1);self.assertTrue(self.transport.closed);proc.terminate.assert_called_once()
+
+    def test_get_retries_only_after_rechecking_the_verified_connection(self):
+        self.transport.proc=Mock(poll=Mock(return_value=None));self.transport.observed_ip=self.transport.expected_ip
+        with patch.object(self.transport,'ensure') as ensure, \
+             patch.object(self.transport,'_request',side_effect=[socket.timeout(),(200,b'{}')]) as request:
+            self.assertEqual(self.transport.request('/client/v4/zones'),(200,b'{}'))
+        self.assertEqual(ensure.call_count,2);self.assertEqual(request.call_count,2)
+
+    def test_write_timeout_is_never_replayed(self):
+        with patch.object(self.transport,'ensure') as ensure, \
+             patch.object(self.transport,'_request',side_effect=socket.timeout()) as request:
+            with self.assertRaises(socket.timeout):
+                self.transport.request('/client/v4/zones',method='POST',body=b'fixture')
+        self.assertEqual(ensure.call_count,1);self.assertEqual(request.call_count,1)
+
+    def test_preflight_is_bounded_before_any_token(self):
+        self.transport.proc=Mock(poll=Mock(return_value=None));self.transport.port=1234
+        connection=Mock();connection.sock=None
+        response=Mock();response.status=200;response.read.return_value=b'ip=192.0.2.10\n'
+        connection.getresponse.return_value=response
+        with patch.object(cf_transport,'ForwardHTTPS',return_value=connection) as factory:
+            self.transport._request('/cdn-cgi/trace')
+        self.assertEqual(factory.call_args.kwargs['timeout'],cf_transport.PREFLIGHT_TIMEOUT)
+        self.assertEqual(connection.request.call_args.args[:2],('GET','/cdn-cgi/trace'))
+        self.assertFalse(connection.request.call_args.kwargs['headers'])
+
+    def test_stale_socket_is_dropped_before_authorized_request(self):
+        self.transport.proc=Mock(poll=Mock(return_value=None));self.transport.port=1234
+        self.transport.observed_ip=self.transport.expected_ip
+        connection=Mock();connection.sock.settimeout.side_effect=OSError('closed')
+        self.transport.connection=connection
+        with self.assertRaises(OSError):
+            self.transport._request('/client/v4/zones',headers={'Authorization':'fixture'})
+        connection.request.assert_not_called();connection.close.assert_called_once()
+        self.assertIsNone(self.transport.connection)
+        self.assertFalse(self.transport.info()['verified'])
 
     def test_ssh_dns_failure_never_uses_local_http_or_leaks_stderr(self):
         with patch.object(cf_transport.subprocess,'run',side_effect=subprocess.CalledProcessError(255,'ssh',stderr='PRIVATE')),patch('urllib.request.urlopen') as direct:
@@ -99,9 +136,24 @@ class TLSForwardTests(unittest.TestCase):
         cls.cert=cls.root/'cert';cls.key=cls.root/'key'
         subprocess.run(['openssl','req','-x509','-newkey','rsa:2048','-nodes','-days','2','-subj','/CN=api.cloudflare.com','-addext','subjectAltName=DNS:api.cloudflare.com','-keyout',str(cls.key),'-out',str(cls.cert)],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
         cls.received=[]
+        cls.connection_ids=[]
+        cls.trace_ip=b'192.0.2.10'
         class Handler(http.server.BaseHTTPRequestHandler):
+            protocol_version='HTTP/1.1'
+            dropped=set()
             def do_GET(self):
-                cls.received.append((self.path,self.headers['Host']));self.send_response(200);self.end_headers();self.wfile.write(b'{"success":true}')
+                cls.received.append((self.path,self.headers['Host']))
+                cls.connection_ids.append((self.path,self.client_address[1],bool(self.headers.get('Authorization'))))
+                if self.path.endswith('/drop-once') and self.path not in self.dropped:
+                    self.dropped.add(self.path);self.connection.shutdown(socket.SHUT_RDWR);self.connection.close();return
+                body=b'ip='+cls.trace_ip+b'\n' if self.path=='/cdn-cgi/trace' else b'{"success":true}'
+                self.send_response(200);self.send_header('Content-Length',str(len(body)))
+                if self.path.endswith('/close'):self.send_header('Connection','close')
+                self.end_headers();self.wfile.write(body)
+            def do_POST(self):
+                self.rfile.read(int(self.headers.get('Content-Length','0')))
+                cls.connection_ids.append((self.path,self.client_address[1],bool(self.headers.get('Authorization'))))
+                self.connection.shutdown(socket.SHUT_RDWR);self.connection.close()
             def log_message(self,*args):pass
         cls.server=http.server.ThreadingHTTPServer(('127.0.0.1',0),Handler)
         context=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER);context.load_cert_chain(cls.cert,cls.key)
@@ -124,6 +176,94 @@ class TLSForwardTests(unittest.TestCase):
         try:
             with self.assertRaises(ssl.SSLCertVerificationError):conn.request('GET','/client/v4/zones')
         finally:conn.close()
+
+    def test_verified_trace_and_api_requests_share_the_same_tls_connection(self):
+        config=json.loads((ROOT/'templates/servers.example.json').read_text())
+        transport=cf_transport.SSHTransport(config,'jp');transport.proc=Mock(poll=Mock(return_value=None))
+        transport.port=self.server.server_port;transport.observed_ip=transport.expected_ip
+        original=cf_transport.ForwardHTTPS
+        def connect(port,timeout):
+            return original(port,timeout=timeout,context=ssl.create_default_context(cafile=str(self.cert)))
+        before=len(self.connection_ids)
+        try:
+            with patch.object(cf_transport,'ForwardHTTPS',side_effect=connect):
+                transport.request('/client/v4/a',headers={'Authorization':'fixture'})
+                transport.request('/client/v4/b',headers={'Authorization':'fixture'})
+        finally:transport.close()
+        rows=self.connection_ids[before:]
+        self.assertEqual([r[0] for r in rows],['/cdn-cgi/trace','/client/v4/a','/client/v4/b'])
+        self.assertEqual(len({r[1] for r in rows}),1)
+        self.assertEqual([r[2] for r in rows],[False,True,True])
+
+    def test_closed_connection_rechecks_egress_before_sending_another_token(self):
+        config=json.loads((ROOT/'templates/servers.example.json').read_text())
+        transport=cf_transport.SSHTransport(config,'jp');transport.proc=Mock(poll=Mock(return_value=None))
+        transport.port=self.server.server_port;transport.observed_ip=transport.expected_ip
+        original=cf_transport.ForwardHTTPS
+        def connect(port,timeout):
+            return original(port,timeout=timeout,context=ssl.create_default_context(cafile=str(self.cert)))
+        before=len(self.connection_ids)
+        try:
+            with patch.object(cf_transport,'ForwardHTTPS',side_effect=connect):
+                transport.request('/client/v4/close',headers={'Authorization':'fixture'})
+                transport.request('/client/v4/next',headers={'Authorization':'fixture'})
+        finally:transport.close()
+        rows=self.connection_ids[before:]
+        self.assertEqual([r[0] for r in rows],['/cdn-cgi/trace','/client/v4/close','/cdn-cgi/trace','/client/v4/next'])
+        self.assertNotEqual(rows[0][1],rows[2][1])
+        self.assertEqual([r[2] for r in rows],[False,True,False,True])
+
+    def test_disconnected_get_rechecks_egress_before_safe_retry(self):
+        config=json.loads((ROOT/'templates/servers.example.json').read_text())
+        transport=cf_transport.SSHTransport(config,'jp');transport.proc=Mock(poll=Mock(return_value=None))
+        transport.port=self.server.server_port;transport.observed_ip=transport.expected_ip
+        original=cf_transport.ForwardHTTPS
+        def connect(port,timeout):
+            return original(port,timeout=timeout,context=ssl.create_default_context(cafile=str(self.cert)))
+        before=len(self.connection_ids)
+        try:
+            with patch.object(cf_transport,'ForwardHTTPS',side_effect=connect):
+                self.assertEqual(transport.request('/client/v4/drop-once',headers={'Authorization':'fixture'})[0],200)
+        finally:transport.close()
+        rows=self.connection_ids[before:]
+        self.assertEqual([r[0] for r in rows],['/cdn-cgi/trace','/client/v4/drop-once','/cdn-cgi/trace','/client/v4/drop-once'])
+        self.assertEqual([r[2] for r in rows],[False,True,False,True])
+
+    def test_new_connection_with_wrong_egress_never_receives_token(self):
+        config=json.loads((ROOT/'templates/servers.example.json').read_text())
+        transport=cf_transport.SSHTransport(config,'jp');transport.proc=Mock(poll=Mock(return_value=None))
+        transport.port=self.server.server_port;transport.observed_ip=transport.expected_ip
+        original=cf_transport.ForwardHTTPS
+        def connect(port,timeout):
+            return original(port,timeout=timeout,context=ssl.create_default_context(cafile=str(self.cert)))
+        before=len(self.connection_ids)
+        try:
+            with patch.object(cf_transport,'ForwardHTTPS',side_effect=connect):
+                transport.request('/client/v4/close',headers={'Authorization':'fixture'})
+                type(self).trace_ip=b'198.51.100.20'
+                with self.assertRaisesRegex(RuntimeError,'未发送管理令牌'):
+                    transport.request('/client/v4/next',headers={'Authorization':'fixture'})
+        finally:
+            type(self).trace_ip=b'192.0.2.10';transport.close()
+        rows=self.connection_ids[before:]
+        self.assertEqual([r[0] for r in rows],['/cdn-cgi/trace','/client/v4/close','/cdn-cgi/trace'])
+        self.assertEqual([r[2] for r in rows],[False,True,False])
+
+    def test_disconnected_post_is_not_replayed(self):
+        config=json.loads((ROOT/'templates/servers.example.json').read_text())
+        transport=cf_transport.SSHTransport(config,'jp');transport.proc=Mock(poll=Mock(return_value=None))
+        transport.port=self.server.server_port;transport.observed_ip=transport.expected_ip
+        original=cf_transport.ForwardHTTPS
+        def connect(port,timeout):
+            return original(port,timeout=timeout,context=ssl.create_default_context(cafile=str(self.cert)))
+        before=len(self.connection_ids)
+        try:
+            with patch.object(cf_transport,'ForwardHTTPS',side_effect=connect):
+                with self.assertRaises((OSError,http.client.HTTPException)):
+                    transport.request('/client/v4/write',method='POST',body=b'fixture',headers={'Authorization':'fixture'})
+        finally:transport.close()
+        rows=self.connection_ids[before:]
+        self.assertEqual([r[0] for r in rows],['/cdn-cgi/trace','/client/v4/write'])
 
 
 if __name__=='__main__':unittest.main()

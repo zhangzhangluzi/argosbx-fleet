@@ -7,10 +7,13 @@ import shlex
 import socket
 import ssl
 import subprocess
+import threading
 import time
 
 HOST='api.cloudflare.com'
 LIMIT=4*1024*1024
+PREFLIGHT_TIMEOUT=8
+REQUEST_TIMEOUT=30
 
 
 class ForwardHTTPS(http.client.HTTPSConnection):
@@ -34,6 +37,7 @@ class SSHTransport:
         # A shared master would retain forwarding after this client exits.
         self.args[self.args.index('-S')+1]='none'
         self.proc=None;self.port=None;self.observed_ip=None;self.closed=False
+        self.connection=None;self.io_lock=threading.RLock()
         atexit.register(self.close)
 
     def resolve(self):
@@ -48,7 +52,12 @@ class SSHTransport:
         except (OSError,ValueError,subprocess.SubprocessError):
             raise RuntimeError('CF 管理出口 DNS/SSH 验证失败；未回退本机出口') from None
 
+    def _drop_connection(self):
+        connection=self.connection;self.connection=None
+        if connection:connection.close()
+
     def _stop(self):
+        self._drop_connection()
         proc=self.proc;self.proc=None;self.port=None;self.observed_ip=None
         if proc:
             if proc.poll() is None:proc.terminate()
@@ -56,23 +65,52 @@ class SSHTransport:
             except subprocess.TimeoutExpired:proc.kill();proc.wait(timeout=5)
 
     def close(self):
-        self._stop();self.closed=True
+        with self.io_lock:
+            self._stop();self.closed=True
 
     def _request(self,path,method='GET',body=None,headers=None):
         if not self.proc or self.proc.poll() is not None:raise RuntimeError('CF 管理 SSH 通道已断开；未回退本机出口')
-        conn=ForwardHTTPS(self.port)
+        timeout=PREFLIGHT_TIMEOUT if path=='/cdn-cgi/trace' else REQUEST_TIMEOUT
+        if not self.connection or self.connection.sock is None:
+            self._drop_connection();self.connection=ForwardHTTPS(self.port,timeout=timeout)
+        conn=self.connection
         try:
+            conn.timeout=timeout
+            if conn.sock is not None:conn.sock.settimeout(timeout)
             conn.request(method,path,body=body,headers=headers or {})
             response=conn.getresponse();data=response.read(LIMIT+1)
             if len(data)>LIMIT:raise ValueError('CF API 响应超过大小限制')
             return response.status,data
-        finally:conn.close()
+        except BaseException:
+            self._drop_connection();raise
+
+    def _verify_connection(self):
+        # A token is sent only over the very TLS connection checked by trace.
+        status,body=self._request('/cdn-cgi/trace')
+        trace=dict(line.split('=',1) for line in body.decode().splitlines() if '=' in line)
+        observed=str(ipaddress.IPv4Address(trace.get('ip','')))
+        if status!=200:raise OSError('CF source trace unavailable')
+        if observed!=self.expected_ip:
+            self._stop();self.closed=True
+            raise RuntimeError('CF 管理出口与登记的 IPv4 不符；未发送管理令牌')
+        if not self.connection or self.connection.sock is None:
+            raise OSError('CF source trace connection closed')
+        self.observed_ip=observed
 
     def ensure(self):
         if self.closed:raise RuntimeError('CF 管理通道已关闭；未回退本机出口')
         if self.observed_ip:
-            if self.proc and self.proc.poll() is None:return
-            raise RuntimeError('CF 管理 SSH 通道已断开；未回退本机出口')
+            if not self.proc or self.proc.poll() is not None:
+                raise RuntimeError('CF 管理 SSH 通道已断开；未回退本机出口')
+            if self.connection and self.connection.sock is not None:return
+            self.observed_ip=None
+            self._verify_connection()
+            return
+        if self.proc:
+            if self.proc.poll() is not None:
+                raise RuntimeError('CF 管理 SSH 通道已断开；未回退本机出口')
+            self._verify_connection()
+            return
         addresses=self.resolve()
         for address in addresses:
             try:
@@ -90,15 +128,7 @@ class SSHTransport:
                         with socket.create_connection(('127.0.0.1',port),.1):break
                     except OSError:time.sleep(.05)
                 else:raise OSError('SSH forward timeout')
-                # This request has no Authorization header. Check before sending a token.
-                status,body=self._request('/cdn-cgi/trace')
-                trace=dict(line.split('=',1) for line in body.decode().splitlines() if '=' in line)
-                observed=str(ipaddress.IPv4Address(trace.get('ip','')))
-                if status!=200:raise OSError('CF source trace unavailable')
-                if observed!=self.expected_ip:
-                    self._stop();self.closed=True
-                    raise RuntimeError('CF 管理出口与登记的 IPv4 不符；未发送管理令牌')
-                self.observed_ip=observed
+                self._verify_connection()
                 return
             except RuntimeError:raise
             except (OSError,ValueError,UnicodeError,http.client.HTTPException):
@@ -107,10 +137,17 @@ class SSHTransport:
 
     def request(self,path,method='GET',body=None,headers=None):
         if not path.startswith('/client/v4/'):raise ValueError('CF 管理通道仅允许 Cloudflare API 路径')
-        self.ensure()
-        return self._request(path,method,body,headers)
+        with self.io_lock:
+            # A failed write may already have reached Cloudflare: never replay it.
+            attempts=2 if method.upper()=='GET' else 1
+            for attempt in range(attempts):
+                self.ensure()
+                try:return self._request(path,method,body,headers)
+                except (OSError,http.client.HTTPException):
+                    if attempt+1==attempts:raise
 
     def info(self):
+        live=bool(not self.closed and self.proc and self.proc.poll() is None and self.connection and self.connection.sock is not None)
         return {'mode':'ssh_forward','server':self.server_id,'expected_ipv4':self.expected_ip,
-                'observed_ipv4':self.observed_ip,'verified':self.observed_ip==self.expected_ip,
+                'observed_ipv4':self.observed_ip,'verified':live and self.observed_ip==self.expected_ip,
                 'tls_server_name':HOST,'direct_fallback':False,'token_stored_on_relay':False}

@@ -1,0 +1,6 @@
+[Unit]
+Description=Log an advertising update failure for %i
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/logger -p user.err -t argosbx-ad-refresh -- "Ad update failed or timed out: %i"

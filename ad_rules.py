@@ -6,8 +6,11 @@ import json
 from pathlib import Path
 import re
 import subprocess
+import sys
 import tempfile
+import time
 from urllib.parse import urlsplit
+import urllib.error
 import urllib.request
 
 from storage import save
@@ -23,8 +26,24 @@ MANAGED_SNAPSHOT = '@sub-store'
 STATE_FILE = 'fleet-ad-state'
 # Exact ad-delivery and SDK hosts selected from AWAvenue Only.Ads v1.7.8.
 EXTRA_ADS = ('ads-video-al.xhscdn.com', 'ads-video-qc.xhscdn.com', 'adsdk.vivo.com.cn')
-BLOCK_SAMPLES = ('ms.applovin.com', 'googleads.g.doubleclick.net', 'www.google-analytics.com', *EXTRA_ADS)
+BLOCK_SAMPLES = ('ms.applovin.com', 'probe.r.applovin.com', 'googleads.g.doubleclick.net',
+                 'www.google-analytics.com', 'pixel.facebook.com', 'analytics.tiktok.com',
+                 'api.appsflyersdk.com', *EXTRA_ADS)
 AD_RULE = 'RULE-SET,广告域名,去广告'
+# Public login, reporting, API and required UI hosts audited for these platforms.
+# A newly blocked host stops publication until a narrow exception is reviewed.
+CONSOLE_SAMPLES = (
+    'adsmanager.facebook.com', 'business.facebook.com', 'www.facebook.com',
+    'accountscenter.facebook.com', 'graph.facebook.com', 'static.facebook.com',
+    'ads.google.com', 'accounts.google.com', 'googleads.googleapis.com',
+    'www.gstatic.com', 'ssl.gstatic.com', 'ads.tiktok.com',
+    'business.tiktok.com', 'accounts.tiktok.com', 'business-api.tiktok.com',
+    'lf-tt4b.tiktokcdn.com', 'sf16-website-login.neutral.ttwstatic.com',
+    'ads.applovin.com', 'ads.axon.ai', 'api.ads.axon.ai', 'max.applovin.com',
+    'dash.applovin.com', 'r.applovin.com', 'www.recaptcha.net',
+    'hq1.appsflyer.com', 'cdn.appsflyer.com',
+    '86c17a2d2df0.edge.sdk.awswaf.com',
+)
 
 
 def sha(data):
@@ -33,8 +52,22 @@ def sha(data):
 
 def get(url, accept):
     request = urllib.request.Request(url, headers={'Accept': accept, 'User-Agent': 'argosbx-fleet-rules'})
-    with urllib.request.urlopen(request, timeout=15) as response:
-        body = response.read(MAX_BYTES + 1)
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(request, timeout=15) as response:
+                body = response.read(MAX_BYTES + 1)
+            break
+        except urllib.error.HTTPError as error:
+            error.close()
+            if error.code not in (408, 429, 500, 502, 503, 504) or attempt == 2:
+                raise
+            reason = 'HTTP-' + str(error.code)
+        except (urllib.error.URLError, TimeoutError, ConnectionError):
+            if attempt == 2:
+                raise
+            reason = 'network'
+        print(json.dumps({'event': 'ad-fetch-retry', 'attempt': attempt + 1, 'reason': reason}), file=sys.stderr)
+        time.sleep(attempt + 1)
     if not body or len(body) > MAX_BYTES:
         raise ValueError('广告名单为空或超出大小限制')
     return body
@@ -190,6 +223,15 @@ def check_exceptions(rules, ad):
     for host, route in console_routes().items():
         if f'DOMAIN,{host},{route}' not in rules[:ad] or first_domain_target(rules[:ad], host) != route:
             raise ValueError('投放后台例外缺失或被前置规则覆盖：' + host)
+
+
+def check_console_samples(rules, marker, domains):
+    earlier = rules[:rules.index(marker)]
+    entries = set(domains.splitlines())
+    for host in CONSOLE_SAMPLES:
+        target = first_domain_target(earlier, host)
+        if target in ('REJECT', 'REJECT-DROP', '去广告', '开启去广告') or (target is None and matches(host, entries)):
+            raise ValueError('投放后台可能被广告规则拦截：' + host)
 
 
 def check_profile(value, client):

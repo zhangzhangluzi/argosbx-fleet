@@ -89,6 +89,52 @@ def stage_ads(snapshot):
     result = stage_import(ad_render, Path('/etc/caddy-sub/argosbx.caddy'), Path('/etc/caddy-sub/Caddyfile'), AD_JOURNAL)
     return {**result, 'asset': name, 'sha256': snapshot['mrs_sha256']}
 
+
+def ad_render_main(text):
+    if text.count(AD_ROUTES) == 1 and text.count('/rules/ad/') == 1:
+        return text
+    marker = '# BEGIN TI UNIFIED SUBSCRIPTION'
+    if '/rules/ad/' in text or 'FLEET AD RULES' in text or text.count(marker) != 1:
+        raise ValueError('无法确认原统一订阅的广告路由作用域')
+    return text.replace(marker, AD_ROUTES + marker, 1)
+
+
+def stage_ads_main(snapshot, path=Path('/etc/caddy-sub/Caddyfile'), journal=AD_JOURNAL, owner=None):
+    if journal.exists():
+        raise ValueError('广告路由有未完成事务')
+    name = store_ad_asset(snapshot)
+    before = path.read_text()
+    after = ad_render_main(before)
+    if before == after:
+        return {'changed': False, 'asset': name}
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.caddy') as candidate:
+        candidate.write(after)
+        candidate.flush()
+        subprocess.run(['/usr/local/bin/caddy', 'validate', '--config', candidate.name,
+                        '--adapter', 'caddyfile'], check=True, capture_output=True)
+    pid = int(subprocess.check_output(['systemctl', 'show', 'caddy-sub', '-p', 'MainPID', '--value']))
+    if pid <= 1:
+        raise ValueError('Caddy 运行进程不可确认')
+    st = path.stat()
+    save(journal, {'before': before, 'after': after, 'uid': st.st_uid,
+                   'gid': st.st_gid, 'mode': st.st_mode & 0o777, 'pid': pid, 'owner': owner,
+                   'asset_sha256': snapshot['mrs_sha256']})
+    if path.read_text() != before:
+        raise ValueError('广告路由计划后配置变化，保留日志')
+    atomic(path, after, st.st_mode & 0o777)
+    os.chown(path, st.st_uid, st.st_gid)
+    os.kill(pid, signal.SIGUSR1)
+    return {'changed': True, 'asset': name, 'caddy_pid': pid, 'pending_readback': True}
+
+
+def ad_finish(restore=False, journal=AD_JOURNAL):
+    if not journal.exists():
+        return {'pending': False}
+    saved = json.loads(journal.read_text())
+    if 'main_sha256' in saved:
+        return compression_finish(restore=restore, journal=journal)
+    return retired_finish(restore=restore, journal=journal)
+
 def compression_finish(restore=False,journal=COMPRESSION_JOURNAL):
     if not journal.exists():return {'pending':False}
     saved=json.loads(journal.read_text());path=Path(saved['path']);main=Path(saved['main'])
@@ -211,6 +257,6 @@ if __name__=='__main__':
         elif command=='compress':result=compression_upgrade()
         elif command.startswith('compression-'):result=compression_finish(command=='compression-recover')
         elif command=='ads-stage':result=stage_ads(json.load(sys.stdin))
-        elif command.startswith('ads-'):result=compression_finish(command=='ads-recover',AD_JOURNAL)
+        elif command.startswith('ads-'):result=ad_finish(command=='ads-recover')
         else:result=upgrade() if command=='upgrade' else finish(command=='recover')
         print(json.dumps(result))

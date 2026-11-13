@@ -1,0 +1,13 @@
+[Unit]
+Description=Bound TCP segment size for new subscription connections
+After=network-online.target ufw.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/argosbx-fleet/argosbx-sub-mss.nft
+ExecStop=/usr/sbin/nft delete table ip argosbx_sub_mss
+
+[Install]
+WantedBy=multi-user.target

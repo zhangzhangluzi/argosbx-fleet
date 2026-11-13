@@ -1,5 +1,5 @@
 {
-  "version": "v1.2.35",
+  "version": "v1.2.36",
   "python_min": "3.10",
   "dependencies": [
     "PyYAML"
@@ -10,7 +10,7 @@
     "cloudflared": "2026.10.7",
     "sub-store": "2.44.7",
     "caddy": "2.11.9",
-    "node": "24.22.2"
+    "node": "24.22.3"
   },
   "updates_proxy_binaries": false
 }

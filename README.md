@@ -20,8 +20,8 @@ flowchart LR
 从 GitHub Release 下载版本包和 SHA256SUMS，先校验再安装。[下载维护包](https://github.com/zhangzhangluzi/argosbx-fleet/releases/latest)
 ```sh
 sha256sum -c SHA256SUMS &&
-  tar -xzf argosbx-fleet-v1.2.35.tar.gz install.py &&
-  python3 install.py argosbx-fleet-v1.2.35.tar.gz --sha256 "$(cut -d ' ' -f1 SHA256SUMS)"
+  tar -xzf argosbx-fleet-v1.2.36.tar.gz install.py &&
+  python3 install.py argosbx-fleet-v1.2.36.tar.gz --sha256 "$(cut -d ' ' -f1 SHA256SUMS)"
 ```
 安装到 `/opt/argosbx-fleet/<版本>`，原子更新 `current` 符号链接。同一版本内容不可覆盖。升级使用相同命令；数据与凭据不在发布包内。
 ## 配置入口
@@ -47,6 +47,8 @@ Sub-Store 的 `/download/collection/all` 和单服务器导出会按客户端返
 Stash 的完整聚合配置首行包含 `#SUBSCRIBED`，统一订阅与七国合集各自使用原链接。按单国或单机导出时不会引用聚合更新地址。已导入的配置先刷新一次，之后按客户端设置定时更新，默认 12 小时。[Stash 服务提供商订阅](https://stash.wiki/features/service-provider-subscription)
 接管现有两份 Stash 模板时，在 Sub-Store 发布机执行 `python3 -B /opt/argosbx-fleet/current/stash_refresh.py`。从标准输入传入私有 JSON，`stash` 和 `external-seven-stash` 分别对应现有统一订阅与七国分享 URL。脚本使用现有发布锁，先校验临时模板，再通过原地址回读，失败时恢复本次改动。
 进程或网络中断后运行 `servers.py recover`，按线上内容恢复本次写入并清理临时对象。恢复前先核对所有待恢复对象，遇到第三方修改保留日志并拒绝开始覆盖。临时对象按资源清单核对存在性，已删除、未创建或删除响应丢失均可重复恢复，清理进度逐项落盘。日志0600、原子替换并 fsync；成功后删除，不长期累计备份。不要绕过工具在发布期间编辑同一 Sub-Store 对象。
+
+定时订阅源导出遇到其他维护事务占锁时，最多等待 30 秒后取得锁再执行；等待超时、配置漂移或实际导出错误仍会报告失败。计划、应用等其他操作保持原有的即时锁冲突保护。
 服务器端未完成的协议事务由 `fleetctl.py protocol-recover --server jp` 恢复；已尝试重启过的服务在恢复时也会重启，未重启过的事务不会触发服务重启。恢复命令也默认拒绝重启，只有明确指定 `--allow-restart` 才会恢复已重启的服务；恢复前统一核对原生文件、登记状态和订阅源，存在外部修改时整次停止。恢复同时还原源文件和读取权限，清除过期计划；未恢复事务会阻止定时导出和发布。
 ## 域名迁移
 CF Token 通过本机 0600 文件引用，不写进 Git 或子进程参数。权限为 Zone Read、DNS Edit、Account Cloudflare Tunnel Edit，限制到目标 zone/account；R2/S3 Token 不可替代。`Cloudflare.zones()` 支持分页读取授权范围内的域名。

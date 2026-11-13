@@ -243,7 +243,9 @@ def certificate_recover():
 
 def main():
     p=argparse.ArgumentParser();p.add_argument('command',choices=['adopt','inspect','plan','planned','apply','commit','recover','export','certificate','certificate-recover','xhttp-stage','xhttp-candidate','xhttp-commit','xhttp-recover','network-snapshot','certificate-snapshot','diagnostic-source','dependency-snapshot']);p.add_argument('--allow-restart',action='store_true');p.add_argument('--defer-commit',action='store_true');a=p.parse_args()
-    with lock(HOME/'agent.lock'):
+    # Periodic source exports can collide with a short read-only inspection.
+    # Wait only for the lock, never retry an actual export failure.
+    with lock(HOME/'agent.lock',timeout=30 if a.command=='export' else 0):
         if a.command.startswith('xhttp-'):
             import xhttp
             # Reuse this module's paths and lock when executed as a script.

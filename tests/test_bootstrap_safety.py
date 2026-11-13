@@ -80,9 +80,10 @@ class BootstrapSafetyTests(unittest.TestCase):
 
     def test_interrupted_install_keeps_current_and_retry_succeeds(self):
         archive=Path(release.package(self.root/'packages'));digest=hashlib.sha256(archive.read_bytes()).hexdigest()
+        version=json.loads((Path(__file__).resolve().parents[1]/'versions.json').read_text())['version']
         dest=self.root/'installed';dest.mkdir();(dest/'v1.0.0').mkdir();(dest/'current').symlink_to('v1.0.0')
         with patch.object(install.os,'rename',side_effect=OSError(errno.ENOSPC,'simulated interrupted rename')):
             with self.assertRaises(OSError):install.install(archive,digest,dest)
-        self.assertEqual(os.readlink(dest/'current'),'v1.0.0');self.assertFalse((dest/'v1.2.35').exists())
-        self.assertEqual(install.install(archive,digest,dest)['installed'],'v1.2.35')
-        self.assertEqual(os.readlink(dest/'current'),'v1.2.35')
+        self.assertEqual(os.readlink(dest/'current'),'v1.0.0');self.assertFalse((dest/version).exists())
+        self.assertEqual(install.install(archive,digest,dest)['installed'],version)
+        self.assertEqual(os.readlink(dest/'current'),version)

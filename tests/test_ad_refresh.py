@@ -36,7 +36,8 @@ class AdRefreshTests(unittest.TestCase):
         self.assertTrue(ad_rules.matches('ms.applovin.com', {'.applovin.com'}))
 
     def test_refresh_skips_same_domains_and_refuses_broken_upstream(self):
-        domains = '.applovin.com\n.doubleclick.net\n.google-analytics.com\n'
+        domains = ('.applovin.com\n.doubleclick.net\n.google-analytics.com\n'
+                   'pixel.facebook.com\nanalytics.tiktok.com\napi.appsflyersdk.com\n')
         before = {'domains': domains + '\n'.join(ad_rules.EXTRA_ADS) + '\n'}
         with patch.object(ad_rules, 'upstream_domains', return_value=('1'*40, domains)), \
                 patch.object(ad_rules, 'compile_snapshot') as compile_rules:
@@ -74,6 +75,6 @@ class AdRefreshTests(unittest.TestCase):
                 patch.object(ad_delivery, 'store_ad_asset'), \
                 patch.object(ad_delivery, 'verify', side_effect=[{}, ValueError('readback failed')]):
             with self.assertRaisesRegex(ValueError, 'readback failed'):
-                ad_delivery.publish({}, api, {}, {}, {}, original[ad_rules.STATE_FILE])
+                ad_delivery.publish({'external_ads_url': 'fixture'}, api, {}, {}, {}, original[ad_rules.STATE_FILE])
             self.assertEqual(live, original)
             self.assertFalse(ad_delivery.JOURNAL.exists())

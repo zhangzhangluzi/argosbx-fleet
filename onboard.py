@@ -218,14 +218,23 @@ def install(config,ident):
     return result
 
 def main():
-    p=argparse.ArgumentParser();p.add_argument('command',choices=['zones','add','install']);p.add_argument('--config',default=str(DEFAULT));p.add_argument('--server');p.add_argument('--country');p.add_argument('--country-name');p.add_argument('--ipv4');p.add_argument('--ipv6');p.add_argument('--zone');p.add_argument('--ssh-key');p.add_argument('--known-hosts');a=p.parse_args()
+    p=argparse.ArgumentParser();p.add_argument('command',choices=['zones','add','install','add-install']);p.add_argument('--config',default=str(DEFAULT));p.add_argument('--server');p.add_argument('--country');p.add_argument('--country-name');p.add_argument('--ipv4');p.add_argument('--ipv6');p.add_argument('--zone');p.add_argument('--ssh-key');p.add_argument('--known-hosts');a=p.parse_args()
     config=read(a.config);os.environ['ARGOSBX_SERVERS_FILE']=str(Path(a.config).resolve())
     if a.command=='zones':
         return {'zones':[{'name':z['name'],'account':z['account']['name'],'active':z['status']=='active'} for z in Cloudflare.from_config(config).zones()]}
     if not a.server:raise ValueError('需要 --server')
     if a.command=='install':return install(config,a.server)
     if any(not getattr(a,k) for k in ('country','country_name','ipv4','zone','ssh_key','known_hosts')):raise ValueError('add 需要国家、IP、域名、SSH 密钥和可信 known_hosts')
-    if a.server in servers(config):raise ValueError('服务器 ID 已存在')
+    if a.server in servers(config):
+        if a.command!='add-install':raise ValueError('服务器 ID 已存在')
+        existing=servers(config)[a.server]
+        expected=(a.country,a.country_name,a.ipv4,a.ipv6,a.zone,
+                  str(Path(a.ssh_key).expanduser().resolve()),str(Path(a.known_hosts).expanduser().resolve()))
+        actual=(existing.get('country'),existing.get('country_name'),existing.get('ipv4'),existing.get('ipv6'),
+                existing.get('onboarding',{}).get('zone'),existing['ssh'].get('identity_file'),existing['ssh'].get('known_hosts'))
+        if actual!=expected:raise ValueError('已有服务器资料与本次输入不一致')
+        if existing.get('status','active')=='active' and not PUBLICATION.exists():return {'server':a.server,'already_active':True}
+        return {'server':a.server,'resumed':True,'result':install(config,a.server)}
     tunnels.discover(Cloudflare.from_config(config),a.zone)
     added=defaults(a.server,a.country,a.country_name,a.ipv4,a.ipv6,a.zone,a.ssh_key,a.known_hosts)
     used={s['name'] for s in config['servers']};suffix=2
@@ -235,6 +244,8 @@ def main():
     if a.country not in config['purpose_order']:config['purpose_order'].append(a.country)
     from fleet import validate
     validate(config);save(a.config,config)
+    if a.command=='add-install':
+        return {'server':a.server,'resumed':False,'result':install(config,a.server)}
     return {'added':a.server,'installed':False,'next':'python3 onboard.py install --config '+a.config+' --server '+a.server}
 
 if __name__=='__main__':

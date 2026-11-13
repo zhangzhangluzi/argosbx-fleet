@@ -8,7 +8,7 @@ import re
 import secrets
 import subprocess
 import sys
-from urllib.parse import urlsplit
+from urllib.parse import parse_qsl, urlsplit
 
 import yaml
 
@@ -33,17 +33,54 @@ CLIENTS = (('clash', 'FlClash/0.8.99'), ('stash', 'Stash/3.6.0'), ('stash', 'Sta
 SR = 'Shadowrocket/2.2.72'
 
 
+def aggregates(settings):
+    if 'aggregates' in settings:
+        return settings['aggregates']
+    values = [{'prefix': ''}]
+    if settings.get('external_ads_url'):
+        values.append({'prefix': 'external-seven-', 'ads_url': settings['external_ads_url']})
+    return values
+
+
 def read_config(path):
     if path.stat().st_mode & 0o077:
         raise ValueError('广告发布设置的权限必须为 0600')
-    settings = json.loads(path.read_text())
+    return validate_config(json.loads(path.read_text()))
+
+
+def validate_config(settings):
+    if not isinstance(settings, dict):
+        raise ValueError('广告发布设置格式无效')
     origin = urlsplit(settings['backend_url'])
-    ads = urlsplit(settings['external_ads_url'])
-    if (origin.scheme != 'https' or not origin.hostname or origin.username or origin.query or origin.fragment
+    if (origin.scheme != 'https' or not origin.hostname or origin.username is not None or origin.query or origin.fragment
             or not re.fullmatch(r'/[A-Za-z0-9_-]+', origin.path)
-            or (ads.scheme, ads.netloc, ads.path) != ('https', origin.netloc, '/share/file/external-seven-shadowrocket-ads')
             or not Path(settings['mihomo']).is_absolute()):
         raise ValueError('广告发布设置与现有订阅入口不匹配')
+    scopes = aggregates(settings)
+    if not isinstance(scopes, list) or not scopes:
+        raise ValueError('广告发布范围无效')
+    prefixes = []
+    for scope in scopes:
+        if not isinstance(scope, dict) or set(scope) - {'prefix', 'ads_url'}:
+            raise ValueError('广告发布范围格式无效')
+        prefix = scope.get('prefix')
+        if not isinstance(prefix, str) or (prefix and not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,47}-', prefix)):
+            raise ValueError('广告发布范围前缀无效')
+        prefixes.append(prefix)
+        if not prefix:
+            if 'ads_url' in scope:
+                raise ValueError('原统一订阅广告地址由后端自动生成')
+            continue
+        ads = urlsplit(scope.get('ads_url', ''))
+        tokens = [v for k, v in parse_qsl(ads.query, keep_blank_values=True) if k == 'token']
+        if ((ads.scheme, ads.netloc, ads.path) != ('https', origin.netloc, '/share/file/' + prefix + 'shadowrocket-ads')
+                or ads.username is not None or ads.fragment or len(tokens) != 1 or not tokens[0]):
+            raise ValueError('广告分享地址与发布范围不匹配')
+    if '' not in prefixes or len(prefixes) != len(set(prefixes)) or len(prefixes) > 12:
+        raise ValueError('广告发布范围缺少原统一订阅或重复')
+    labels = ['native' if not p else 'external' if p == 'external-seven-' else p[:-1] for p in prefixes]
+    if len(labels) != len(set(labels)):
+        raise ValueError('广告发布范围名称冲突')
     return settings
 
 
@@ -103,8 +140,9 @@ def patch_literal(script, marker, update):
 
 
 def ads_url(settings, prefix):
-    return (settings['external_ads_url'] if prefix else
-            settings['backend_url'] + '/api/file/shadowrocket-ads')
+    if not prefix:
+        return settings['backend_url'] + '/api/file/shadowrocket-ads'
+    return next(scope['ads_url'] for scope in aggregates(settings) if scope['prefix'] == prefix)
 
 
 def candidate(before, settings, previous, desired, snapshot, prefix, fmt):
@@ -157,12 +195,14 @@ def verify_scope(settings, api, snapshot, prefix, names):
     ad_rules.check_shadowrocket(sr, domains, url)
     sr_rules = sr.split('[Rule]', 1)[1].split('\n[', 1)[0].splitlines()
     check_blocks(sr_rules, 'DOMAIN-SET,' + url + ',REJECT', domains)
+    ad_rules.check_console_samples(sr_rules, 'DOMAIN-SET,' + url + ',REJECT', domains)
     profiles = {}
     for fmt, ua in CLIENTS:
         profile = yaml.safe_load(read(fmt, ua))
         check_profile(profile)
         ad_rules.check_profile(profile, fmt)
         check_blocks(profile['rules'], ad_rules.AD_RULE, domains)
+        ad_rules.check_console_samples(profile['rules'], ad_rules.AD_RULE, domains)
         provider = profile['rule-providers']['广告域名']
         if provider['url'] != ad_rules.asset_url(asset_config(settings), snapshot):
             raise ValueError('客户端引用的广告 MRS 版本不同')
@@ -180,9 +220,13 @@ def check_blocks(rules, marker, domains):
 
 def verify(settings, api, snapshot, names=None):
     check_asset(settings, snapshot)
+    scopes = aggregates(settings)
     with ThreadPoolExecutor(max_workers=2) as pool:
-        checks = [pool.submit(verify_scope, settings, api, snapshot, prefix, names or {}) for prefix in PREFIXES]
-        return dict(zip(('native', 'external'), (check.result() for check in checks)))
+        checks = [pool.submit(verify_scope, settings, api, snapshot, scope['prefix'], names or {}) for scope in scopes]
+        labels = ['native' if not s['prefix'] else 'external' if s['prefix'] == 'external-seven-' else s['prefix'][:-1] for s in scopes]
+        if len(labels) != len(set(labels)):
+            raise ValueError('广告发布范围名称冲突')
+        return dict(zip(labels, (check.result() for check in checks)))
 
 
 def read_state(raw):
@@ -197,7 +241,8 @@ def read_state(raw):
 
 def publish(settings, api, previous, desired, snapshot, active_file):
     items = []
-    for prefix in PREFIXES:
+    for scope in aggregates(settings):
+        prefix = scope['prefix']
         for fmt in FORMATS:
             name = prefix + fmt
             before = get(api, 'file', name)
@@ -243,8 +288,13 @@ def publish(settings, api, previous, desired, snapshot, active_file):
     return result
 
 
-def refresh(settings, seed=None, verify_only=False):
+def refresh(settings, seed=None, verify_only=False, progress=None):
+    def phase(name):
+        if progress:
+            progress(name)
+
     api = api_config(settings)
+    phase('recovery')
     if AD_JOURNAL.exists():
         raise ValueError('Caddy 广告规则路由有未完成事务')
     if verify_only and JOURNAL.exists():
@@ -259,13 +309,17 @@ def refresh(settings, seed=None, verify_only=False):
     if verify_only:
         if active is None or previous['console_routes'] != desired:
             raise ValueError('线上广告例外与维护代码不同')
+        phase('console-verification')
         return {'verified': True, 'domains': current['domain_count'], 'profiles': verify(settings, api, current)}
+    phase('upstream-download')
     snapshot = ad_rules.refresh(current, settings['mihomo'])
     result = {'changed': False, 'domains': snapshot['domain_count'], 'revision': snapshot['revision'],
               'mrs_sha256': snapshot['mrs_sha256']}
     if active and snapshot == current and previous['console_routes'] == desired:
-        check_asset(settings, snapshot)
-        return result
+        phase('console-verification')
+        profiles = verify(settings, api, snapshot)
+        return {**result, 'profiles': profiles}
+    phase('publication')
     profiles = publish(settings, api, previous['console_routes'], desired, snapshot, active)
     return {**result, 'changed': True, 'profiles': profiles}
 

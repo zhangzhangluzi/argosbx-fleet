@@ -20,8 +20,8 @@ flowchart LR
 从 GitHub Release 下载版本包和 SHA256SUMS，先校验再安装。[下载维护包](https://github.com/zhangzhangluzi/argosbx-fleet/releases/latest)
 ```sh
 sha256sum -c SHA256SUMS &&
-  tar -xzf argosbx-fleet-v1.2.36.tar.gz install.py &&
-  python3 install.py argosbx-fleet-v1.2.36.tar.gz --sha256 "$(cut -d ' ' -f1 SHA256SUMS)"
+  tar -xzf argosbx-fleet-v1.2.37.tar.gz install.py &&
+  python3 install.py argosbx-fleet-v1.2.37.tar.gz --sha256 "$(cut -d ' ' -f1 SHA256SUMS)"
 ```
 安装到 `/opt/argosbx-fleet/<版本>`，原子更新 `current` 符号链接。同一版本内容不可覆盖。升级使用相同命令；数据与凭据不在发布包内。
 ## 配置入口
@@ -82,9 +82,9 @@ python3 release.py dist
 控制机需要 Python 3.10+、PyYAML、OpenSSH；目标为 root 可 SSH 登录的空白 Ubuntu/Debian amd64 或 arm64。先核实主机指纹并写入专用 known_hosts，不能关闭 SSH 身份校验。控制机 `cloudflare.token_file` 指向 0600 Token 文件，权限为所选域名 Zone Read、DNS Edit，所选账号 Cloudflare Tunnel Edit；管理 Token 不上传 VPS，VPS 仅保存独立隧道连接 Token。
 ```sh
 python3 onboard.py zones --config /private/servers.json
-python3 onboard.py add --config /private/servers.json --server jp2 --country JP --country-name 日本 --ipv4 192.0.2.20 --zone example.com --ssh-key ~/.ssh/vps --known-hosts ~/.ssh/vps_known_hosts
-python3 onboard.py install --config /private/servers.json --server jp2
+python3 onboard.py add-install --config /private/servers.json --server jp2 --country JP --country-name 日本 --ipv4 192.0.2.20 --zone example.com --ssh-key ~/.ssh/vps --known-hosts ~/.ssh/vps_known_hosts
 ```
+`add-install` 把 `add` 和 `install` 串起来；安装未完成时使用相同参数重复执行即可续装。仍可分开执行 `add`、检查私有配置，再执行 `install`。
 `add` 生成完整可编辑的默认值、独立域名及随机私密源路径，状态为 `pending`，不会参与现有服务器发布。`install` 串联主机检查、校验固定版本二进制、创建固定隧道、DNS、Caddy ACME 证书、两个代理内核、导出定时器、外部 HTTPS 源验收、独立客户端逐协议 HTTPS/出口 IP/UDP 验收，再登记 Sub-Store 源、更新原订阅并转为 `active`。验收使用其他已启用服务器的临时回环客户端；IPv6 需有另一台具备 IPv6 的验收端，条件不足或任一检查失败均保持 `pending`。已有统一地址不变。不得把现有 VPS 当成空白机；检测到已有安装即拒绝覆盖。安装中断后用原配置重复同一命令续装，保留第一次生成的节点凭据。
 目标机必须预装 Python 3 和 systemd；脚本先通过标准库检查空白状态、断点日志、监听地址、现有维护版本，才安装其他依赖或上传维护包。发布前写入私有本地事务并在协调机创建独立标记，阻止其他遵守该标记的控制端发布；订阅回读和资料落盘后才提交，并同步独立规则与国家订阅路由。中断后在原控制机使用相同 `onboard.py install --config ... --server ...` 恢复；外部修改冲突时保留现场。若原控制机的私有事务文件遗失，协调标记会阻止其他发布，需要先核对订阅和资料再人工处理，不能盲目删除标记。该机制不约束不使用本程序锁的第三方写入。
 v1.2.35 新机初始化固定使用 Xray 26.11.9 和 Caddy 2.11.9，并校验 amd64 和 arm64 的官方发布包。默认加入已有的 CF XHTTP 入口；无 IPv6 地址的新机使用 IPv4 监听。维护包安装不会升级现有代理内核。[Xray 发布说明](https://github.com/XTLS/Xray-core/releases/tag/v26.11.9)
@@ -108,11 +108,13 @@ python3 servers.py publish
 
 ## 去广告与投放后台例外
 独立规则源在主订阅发布后同步；每日广告更新任务结束后也会同步，失败时任务状态显示失败。需要修复已安装的标准规则处理器时，在发布服务器执行 `python3 -B /opt/argosbx-fleet/current/standard_provider_update.py`；异常保留恢复日志时使用同一命令的 `recover` 子命令。
-Clash/FlClash、Stash 使用 MetaCubeX `category-ads-all.mrs` 域名表，每 86400 秒更新。规则从上到下首次匹配：精确后台例外优先；命中广告表后交给“去广告”选择组，Clash 开启执行 REJECT，关闭执行 PASS，继续匹配后续应用和国内外规则。Stash 原订阅内同样提供“开启去广告／关闭去广告”分组，默认开启执行 REJECT；关闭后命中广告表的请求跟随日常线路，不再继续后面的国内外分流。这是两端明确的行为差异；Stash 不发出 PASS，也不需要单独安装覆写。其余请求和精确后台例外仍按原规则处理。例外和 DNS 策略由 `dns_policy.py` 一处生成，保持发布与导出一致。Shadowrocket 默认开启同源广告域名集：Sub-Store 将 `+.` 后缀转换为原生 `.` 格式，保留精确后台例外，避免引入更大、不同口径的广告表。
+Clash/FlClash、Stash 使用基于 MetaCubeX 广告集合编译的版本化 MRS 域名表；发布机每天检查上游，客户端刷新订阅后获取新版本并缓存。规则从上到下首次匹配：精确后台例外优先；命中广告表后交给“去广告”选择组，Clash 开启执行 REJECT，关闭执行 PASS，继续匹配后续应用和国内外规则。Stash 原订阅内同样提供“开启去广告／关闭去广告”分组，默认开启执行 REJECT；关闭后命中广告表的请求跟随日常线路，不再继续后面的国内外分流。这是两端明确的行为差异；Stash 不发出 PASS，也不需要单独安装覆写。其余请求和精确后台例外仍按原规则处理。例外和 DNS 策略由 `dns_policy.py` 一处生成，保持发布与导出一致。Shadowrocket 默认开启同源广告域名集：Sub-Store 将 `+.` 后缀转换为原生 `.` 格式，保留精确后台例外，避免引入更大、不同口径的广告表。
 
 可用 `python3 ad_rules.py <候选快照.json>` 从 GitHub 文件 API 获取同一提交的文本和 MRS，并用已安装的 Node 校验 MRS 类型和条目数。把候选通过标准输入交给订阅服务器的 `country_routes.py ads-stage`，核验版本化 MRS 下载后执行 `ads-finish`。在 `subscription.ad_rules_snapshot` 引用该快照后，原发布流程会校验实际 MRS 下载并生成同版本的 Shadowrocket 本地名单。失败时可继续使用已发布版本。服务器源的 `subscription.cache_key` 对应 Sub-Store 已预热的独立缓存，公网源恢复后可取回更新。
 
-现有原统一与七国聚合可使用 `ad_delivery.py` 一起维护。发布服务器通过权限为 0600 的 `/etc/argosbx-fleet/ad-publisher.json` 提供 `backend_url`、`external_ads_url` 和 `mihomo` 编译器路径。首次运行 `ad_delivery.py initialize` 从标准输入读取当前 `snapshot` 和 `console_routes`，成功后写入 Sub-Store 私有对象 `fleet-ad-state`。把维护清单的 `subscription.ad_rules_snapshot` 设为 `@sub-store`，手动生成就会使用这个版本。`ad_delivery.py verify` 验收已发布配置，`refresh` 每次检查上游内容，变化后用同一份域名表生成 MRS 和 Shadowrocket 名单。仓库中的 `argosbx-ad-refresh.timer` 每天北京时间 04:25 运行。发布失败会恢复原配置。
+发布服务器通过 `ad_setup.py` 接入自动广告更新。已有配置直接执行 `python3 -B /opt/argosbx-fleet/current/ad_setup.py`；首次接入使用 `--input`，从标准输入读取仅含私有后端地址的 JSON（例如 `{"backend_url":"https://sub.example.com/PRIVATE_PATH"}`），必要时以 `shares` 指定不唯一的聚合广告分享地址，以 `mihomo` 指定现有编译器。私有文件及地址不得提交仓库。脚本识别完整聚合、复用唯一的现有分享凭据，找不到或有歧义时停止；首次初始化在验证后才发布，当前文件冲突会保留事务等待处理。首次需要 Caddy 规则路由时只热加载原进程。
+`argosbx-ad-refresh.timer` 每天北京时间 04:25 检查上游，暂时失败的网络请求有有限重试；遇到异常上游变动、后台样本误拦或发布校验失败时保留之前的已发布规则。每轮验收原统一及已登记聚合的 Clash、Stash 和 Shadowrocket 配置，检查广告拦截样本及 Meta、Google Ads、TikTok Ads、AppLovin、AppsFlyer 等 27 个既有公开入口样本；不会自动放宽整个平台域名。检查范围是固定样本，不等于真实账户登录和全部报表 API 已测试。
+任务结果和最近一次成功时间保存在服务器本地，失败及超时写入服务器日志，不发送外部通知。可用 `python3 -B /opt/argosbx-fleet/current/ad_monitor.py status` 查看状态、`python3 -B /opt/argosbx-fleet/current/ad_monitor.py verify` 只读验收；日志分别通过 `journalctl -u argosbx-ad-refresh.service` 和 `journalctl -t argosbx-ad-refresh` 查看。
 2026-10-13 对常见投放后台的公开入口、重定向和界面资源核查后，增加以下精确 DIRECT 例外及国内 DoH，不放行平台父域名：
 - `e.qq.com`、`ad.qq.com`：腾讯营销入口、投放平台与同源资源。
 - `ad.e.kuaishou.com`、`ad-m.e.kuaishou.com`：磁力智投电脑和手机版后台。

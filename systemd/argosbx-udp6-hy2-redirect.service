@@ -1,0 +1,13 @@
+[Unit]
+Description=IPv6 UDP ingress redirect to existing HY2 service
+After=network-online.target ufw.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/argosbx-fleet/udp6-hy2-redirect.nft
+ExecStop=/usr/sbin/nft delete table ip6 argosbx_hy2_redirect
+
+[Install]
+WantedBy=multi-user.target

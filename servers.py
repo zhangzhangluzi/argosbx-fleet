@@ -90,6 +90,11 @@ def native_preflight(config):
             raise ValueError(server['id']+'：CF 隧道未就绪，未发布订阅')
         if live.get('certificate_health') is None or any(not v['usable'] for v in live['certificate_health'].values()):
             raise ValueError(server['id']+'：证书尚未验收或已失效')
+        ingress=server.get('ipv6_hy2_ingress')
+        if ingress is not None:
+            actual=live.get('ipv6_hy2_redirect',{})
+            if not actual.get('verified') or any(actual.get(k)!=v for k,v in {'address':server['ipv6'],**ingress}.items()):
+                raise ValueError(server['id']+'：IPv6 HY2 转发尚未就绪，未发布订阅')
     with ThreadPoolExecutor(max_workers=min(4,max(1,len(configured)))) as pool:list(pool.map(check,configured))
 
 

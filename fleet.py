@@ -123,10 +123,21 @@ def validate(data):
         if not isinstance(tailnet, dict) or set(tailnet) != {'magic_dns_suffix'}:
             raise ValueError('tailscale 仅接受 magic_dns_suffix；未使用时省略 tailscale')
         check(tailnet['magic_dns_suffix'], r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.ts\.net', 'Tailscale MagicDNS 域名')
-    from protocols import validate_settings
+    from protocols import validate_settings,protocol_type,families
     for server in data['servers']:
         protocols=server.get('protocols',{})
         validate_settings(protocols,complete=data['schema']>=2)
+        ingress=server.get('ipv6_hy2_ingress')
+        if ingress is not None:
+            if (not isinstance(ingress,dict) or set(ingress)!={'port','target_port'} or not server.get('ipv6')
+                    or any(type(ingress[k]) is not int or not 1<=ingress[k]<=65535 for k in ('port','target_port'))
+                    or ingress['port']==ingress['target_port']):raise ValueError('IPv6 HY2 入口配置无效')
+            hy2=protocols.get('hy2',{})
+            if hy2.get('enabled') is not True or hy2.get('port')!=ingress['target_port'] or 'ipv6' not in families('hy2',hy2,server):
+                raise ValueError('IPv6 HY2 转发目标与已登记服务不一致')
+            for ident,p in protocols.items():
+                if p.get('enabled') and protocol_type(ident,p) in ('hy2','salamander') and p.get('port')==ingress['port'] and 'ipv6' in families(ident,p,server):
+                    raise ValueError('IPv6 HY2 入口与原生 UDP 监听冲突')
         if data['schema']>=2 and (not protocols or not any(p['enabled'] for p in protocols.values())):
             raise ValueError('每台已登记服务器至少保留一个启用协议；移除整机请从汇总配置中移除')
         certs=server.get('certificates',{})
@@ -158,7 +169,8 @@ def host_map(data=None):
 def region_spec(server):
     return {'country': server['country'], 'name': server['name'],
             'IPv4': server['domains']['ipv4'], 'IPv6': server['domains']['ipv6'],
-            'cf': server['domains']['cf'], 'salamanderIPv6': server['salamander_ipv6'], 'protocols':server.get('protocols',{})}
+            'cf': server['domains']['cf'], 'salamanderIPv6': server['salamander_ipv6'],
+            'ipv6Hy2Ingress':server.get('ipv6_hy2_ingress'),'protocols':server.get('protocols',{})}
 
 
 def resolve_path(value, data=None):

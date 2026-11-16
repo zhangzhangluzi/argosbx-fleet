@@ -51,6 +51,10 @@ function operator(proxies) {
       if (!domain) continue;
       const n = JSON.parse(JSON.stringify(p));
       n.server = domain;
+      if (family === 'IPv6' && id === 'hy2' && spec.ipv6Hy2Ingress) {
+        if (p.port !== spec.ipv6Hy2Ingress.target_port) throw new Error('IPv6 HY2 redirect target mismatch');
+        n.port = spec.ipv6Hy2Ingress.port;
+      }
       n.name = spec.name+'-'+(p.type==='hysteria2'?'U':'T')+'-'+family.replace('IP','')+'-'+protocol+suffix;
       n.udp = true;
       n['skip-cert-verify'] = false;

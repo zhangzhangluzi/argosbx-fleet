@@ -261,6 +261,8 @@ def main():
             r['source_matches']=TARGET.exists() and yaml.safe_load(TARGET.read_text())==export(configs(s),s) if r['native_configuration_matches'] else False
             r['certificate_health']=certificate_health(s)
             r['cloudflare_health']=cloudflare_health(s)
+            import udp6_redirect
+            if udp6_redirect.CONFIG.exists():r['ipv6_hy2_redirect']=udp6_redirect.verify()
         elif a.command=='dependency-snapshot':
             import dependency_audit
             if a.allow_restart or a.defer_commit:raise ValueError('依赖快照只读，不接受重启或提交选项')

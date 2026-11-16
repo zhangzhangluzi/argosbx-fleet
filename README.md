@@ -20,8 +20,8 @@ flowchart LR
 从 GitHub Release 下载版本包和 SHA256SUMS，先校验再安装。[下载维护包](https://github.com/zhangzhangluzi/argosbx-fleet/releases/latest)
 ```sh
 sha256sum -c SHA256SUMS &&
-  tar -xzf argosbx-fleet-v1.2.43.tar.gz install.py &&
-  python3 install.py argosbx-fleet-v1.2.43.tar.gz --sha256 "$(cut -d ' ' -f1 SHA256SUMS)"
+  tar -xzf argosbx-fleet-v1.2.44.tar.gz install.py &&
+  python3 install.py argosbx-fleet-v1.2.44.tar.gz --sha256 "$(cut -d ' ' -f1 SHA256SUMS)"
 ```
 安装到 `/opt/argosbx-fleet/<版本>`，原子更新 `current` 符号链接。同一版本内容不可覆盖。升级使用相同命令；数据与凭据不在发布包内。
 ## 配置入口
@@ -44,6 +44,8 @@ python3 servers.py plan
 python3 servers.py publish
 ```
 `protocols` 包含 `reality/hy2/cf/anytls/shadowtls/salamander/xhttp`，各自显式设置 enabled、port、listen；TLS 协议通过 certificate 引用 certificates 中的证书文件。另有 sni、cover_host、cover_port、alpn、ws_path、padding_scheme、client 参数。导出根据协议标识和原生配置读取凭据，不依赖节点数组下标、固定端口、固定 tag。直接编辑 native 文件会触发漂移保护，不会无声发布不一致节点。生成器显式使用本次 inventory；多次生成及域名迁移不会沿用模块导入时的旧域名映射，私有 payload 从创建起即为 0600。schema=2 必须显式填写已登记协议的完整参数和证书绝对路径；不支持的参数会报错，清空 client 选项或 ALPN 后不会从旧模板继承。只部署部分协议的服务器不会生成不存在的 Shadowrocket 节点；整台停用应从汇总配置移除，不能发布空国家组。
+
+如果已有 HY2 的 IPv6 原端口不可达、另一个已开放 UDP 端口经过验证可用，可以在对应服务器上用 `udp6_redirect.py stage --address <公网IPv6> --port <入口端口> --target-port <已有HY2端口>` 暂时启用仅匹配该 IPv6 地址的 nftables 转发。测试真实代理业务后执行 `commit` 持久化；失败执行 `recover`，未提交时定时器自动回滚。随后在该服务器资料填写 `ipv6_hy2_ingress` 的 `port`、`target_port` 并发布，生成器只改已有 HY2 的 IPv6 节点端口。发布前检查转发、目标服务、IPv6 地址和主机防火墙；IPv4、协议凭据及订阅链接保持不变。变更目标端口前应先检查这项引用。
 启停监听、修改端口等需要原生服务重启；默认拒绝修改。只有明确维护窗口才使用 `protocol-apply --allow-restart`。普通参数计划、订阅调整、导出器升级均不重启代理。`enabled=false` 会从服务端和订阅同时移除该入口；已有凭据保留在私有接管状态中，便于再次启用。
 ## 发布与恢复
 `servers.py plan` 创建随机命名的临时 Sub-Store 对象，使用原生转换器校验 Clash、Stash 和 Shadowrocket 分组，随后删除。`publish` 检查输入和每个线上对象未被修改，记录写前日志后更新并回读原统一地址。它是可恢复的多对象发布，不是 Sub-Store 数据库级原子事务。

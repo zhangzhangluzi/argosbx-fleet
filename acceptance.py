@@ -24,6 +24,10 @@ def cases(server,nodes):
         if not n or classify(n)!=protocol_type(ident,p):raise ValueError('验收节点缺失或协议不符')
         for family in (['cf'] if protocol_type(ident,p) in ('cf','xhttp') else families(ident,p,server)):
             node=copy.deepcopy(n);node['server']=p['sni'] if family=='cf' else server[family]
+            ingress=server.get('ipv6_hy2_ingress')
+            if ident=='hy2' and family=='ipv6' and ingress:
+                if node.get('port')!=ingress['target_port']:raise ValueError('HY2 IPv6 转发目标与源节点不一致')
+                node['port']=ingress['port']
             result.append({'name':ident+'/'+family,'node':node,'expected_ips':[server[f] for f in ('ipv4','ipv6') if server[f]]})
     if len(templates)!=sum(p['enabled'] for p in server['protocols'].values()):raise ValueError('验收节点集合不一致')
     return result

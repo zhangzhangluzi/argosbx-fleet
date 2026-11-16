@@ -7,6 +7,7 @@ import unittest
 from unittest.mock import patch
 
 import fleet
+import acceptance
 import servers
 import udp6_redirect as redirect
 
@@ -156,4 +157,13 @@ class InventoryTests(unittest.TestCase):
         with patch('fleetctl.remote', return_value=live):
             with self.assertRaisesRegex(ValueError, 'IPv6 HY2'): servers.native_preflight(config)
 
+    def test_native_diagnostics_use_the_published_ipv6_ingress(self):
+        server=self.config()['servers'][0]
+        nodes=[{'name':'fleet.hy2','type':'hysteria2','port':2446,'password':'test'}]
+        checks={x['name']:x['node'] for x in acceptance.cases(server,nodes)}
+        self.assertEqual(checks['hy2/ipv4']['port'],2446)
+        self.assertEqual(checks['hy2/ipv6']['port'],443)
+        self.assertEqual(nodes[0]['port'],2446)
+        nodes[0]['port']=2447
+        with self.assertRaises(ValueError):acceptance.cases(server,nodes)
 if __name__ == '__main__': unittest.main()

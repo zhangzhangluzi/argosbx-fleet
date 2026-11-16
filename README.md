@@ -20,8 +20,8 @@ flowchart LR
 从 GitHub Release 下载版本包和 SHA256SUMS，先校验再安装。[下载维护包](https://github.com/zhangzhangluzi/argosbx-fleet/releases/latest)
 ```sh
 sha256sum -c SHA256SUMS &&
-  tar -xzf argosbx-fleet-v1.2.47.tar.gz install.py &&
-  python3 install.py argosbx-fleet-v1.2.47.tar.gz --sha256 "$(cut -d ' ' -f1 SHA256SUMS)"
+  tar -xzf argosbx-fleet-v1.2.48.tar.gz install.py &&
+  python3 install.py argosbx-fleet-v1.2.48.tar.gz --sha256 "$(cut -d ' ' -f1 SHA256SUMS)"
 ```
 安装到 `/opt/argosbx-fleet/<版本>`，原子更新 `current` 符号链接。同一版本内容不可覆盖。升级使用相同命令；数据与凭据不在发布包内。
 ## 配置入口
@@ -181,11 +181,11 @@ XHTTP 的客户端复用配置写在该入站的 `client.reuse-settings`，导�
 
 ## v1.2.47：日本自建出口与 CF 入口
 
-`bestcf-chain.js` 直接读取 Mia 与麒麟两个公开入口列表，去除说明行、重复项和非公网 IPv4 后，保留其余地址及原端口，结合已有 `argo-jp` 的 VLESS Reality 节点生成链式候选。名称保留来源与地址，便于来源更新后保持稳定。列表缓存新鲜期为 30 分钟，网络故障时仅使用六小时内的最近有效结果；单个来源持续故障时保留另一来源，两个来源都不可用或日本节点缺失时不生成链式节点。客户端的日本自建分组每 30 分钟测试整条链，由客户端当前网络决定入口是否可用；CF 节点仅提供 TCP，不能据此推断 UDP 可用。
+`bestcf-chain.js` 直接读取 Mia 与麒麟两个公开入口列表，去除说明行、重复项和非公网 IPv4 后，保留其余地址及原端口，结合已有 `argo-jp` 的 VLESS Reality 节点生成链式候选。名称保留来源与地址，便于来源更新后保持稳定。正常订阅请求合并一分钟内的重复读取，之后重新获取上游；网络故障时仅使用六小时内的最近有效结果。单个来源持续故障时保留另一来源，两个来源都不可用或日本节点缺失时不生成链式节点。客户端的日本自建分组每 30 分钟测试整条链，由客户端当前网络决定入口是否可用；CF 节点仅提供 TCP，不能据此推断 UDP 可用。
 
 `bestcf_profiles.py` 将日本自建出口从普通日本分组中独立出来，并为 Shadowrocket URI 增加链式引用及缺少中转时拒绝连接的配置。`bestcf_pages.py` 和 `bestcf-pages-sub.js` 用于保留已有国家 Pages 的订阅地址；生产连接和旧地址应先在隔离环境验收。订阅包含日本 VPS 凭据，禁止提交到 GitHub 或交给第三方订阅转换服务。
 
-聚合服务器可启用 `argosbx-bestcf-refresh.timer`，每两小时调用 `bestcf_refresh.py` 检查当前订阅的两份来源及节点引用。该任务只读现有本地分享身份、写入系统日志，不重启代理进程；入口有效性、完整链路速度和客户端原生兼容性仍需独立验收。
+聚合服务器可启用 `argosbx-bestcf-refresh.timer`，每 30 分钟调用 `bestcf_refresh.py` 检查当前订阅的两份来源及节点引用。该任务只读现有本地分享身份、写入系统日志，不重启代理进程；客户端仍须按自身设置更新订阅。入口有效性、完整链路速度和客户端原生兼容性仍需独立验收。
 
 ## v1.2.7：规则语义与 DNS 性能
 - BrowserLeaks、DNSLeakTest、IPLeak 的页面及子域名明确走日常线路，DNS 同步；这是用途例外，不代表 WebRTC、系统或所有 DNS 路径已经无泄漏。

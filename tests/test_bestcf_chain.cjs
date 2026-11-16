@@ -87,4 +87,18 @@ test('fresh cached lists avoid repeated network requests', async()=>{
   const f = fixture();
   await f.run(); await f.run();
   assert.equal(f.calls(), 2);
+  f.advance(61000);
+  await f.run();
+  assert.equal(f.calls(), 4);
+});
+test('refresh after the burst window observes upstream additions and removals', async()=>{
+  const data={...feeds};
+  const f=fixture(data);
+  const first=await f.run();
+  assert.ok(first.some(p=>p.name.includes('Mia-8.8.8.8-443')));
+  data.Mia='4.2.2.2:443#updated';
+  f.advance(61000);
+  const next=await f.run();
+  assert.ok(next.some(p=>p.name.includes('Mia-4.2.2.2-443')));
+  assert.ok(!next.some(p=>p.name.includes('Mia-8.8.8.8-443')));
 });

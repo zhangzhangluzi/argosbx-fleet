@@ -6,7 +6,8 @@ async function operator(proxies) {
     { id: 'Qilin', url: 'https://bestcf.pages.dev/uouin/all.txt' },
   ];
   const now = Date.now();
-  const freshFor = 30 * 60 * 1000;
+  // Collapse bursts of subscription requests, then check the live upstream.
+  const freshFor = 60 * 1000;
   const validFor = 6 * 60 * 60 * 1000;
   const cacheKey = id => 'argosbx-jp-self-cf-v3-' + id;
   const publicIPv4 = (value) => {

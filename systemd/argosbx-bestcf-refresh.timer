@@ -3,7 +3,7 @@ Description=Periodic Japan CF source refresh
 
 [Timer]
 OnBootSec=5min
-OnUnitActiveSec=2h
+OnUnitActiveSec=30min
 RandomizedDelaySec=3min
 Persistent=true
 

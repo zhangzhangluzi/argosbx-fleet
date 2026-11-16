@@ -25,12 +25,13 @@ jobs:
       - run: python release.py dist
       - name: Blank server and native protocol acceptance
         run: |
-          if ! /usr/bin/python3 -c 'import yaml' || ! command -v openssl >/dev/null || [ ! -r /etc/ssl/certs/ca-certificates.crt ]; then
+          if ! /usr/bin/python3 -c 'import yaml' || ! command -v openssl >/dev/null || ! command -v nft >/dev/null || ! command -v unshare >/dev/null || [ ! -r /etc/ssl/certs/ca-certificates.crt ]; then
             sudo apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=15 update -qq
-            sudo apt-get install -y ca-certificates openssl python3-yaml
+            sudo apt-get install -y ca-certificates openssl python3-yaml nftables util-linux
           fi
           sudo python3 install.py dist/argosbx-fleet-*.tar.gz --sha256 "$(cut -d' ' -f1 dist/SHA256SUMS)"
           sudo python3 -B tests/native_udp_buffers.py
+          sudo python3 -B tests/native_shadow_mss.py
           sudo python3 -B tests/native_install.py
           sudo python3 -B tests/native_share_compression.py
           sudo python3 -B tests/native_ad_setup.py

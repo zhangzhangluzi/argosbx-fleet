@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stage or recover a narrowly scoped, non-disruptive subscription MSS clamp."""
+"""Stage or recover narrowly scoped, non-disruptive TCP MSS clamps."""
 import argparse
 import hashlib
 import json
@@ -20,7 +20,34 @@ RULE_SOURCE=ROOT/'templates/argosbx-sub-mss.nft'
 UNIT_SOURCE=ROOT/'systemd/argosbx-sub-mss.service'
 SERVICE='argosbx-sub-mss.service'
 TIMER='argosbx-sub-mss-rollback.timer'
+TABLE='argosbx_sub_mss'
+PORT=8443
+LISTENER_OWNER='caddy'
+PROFILE='subscription'
 PROTECTED=('xr','sb','argo','argosbx-xhttp','caddy-sub','sub-store')
+
+def select_profile(profile):
+    """Select an independent profile before acquiring its lock or changing state."""
+    global RULE,UNIT,JOURNAL,LOCK,RULE_SOURCE,UNIT_SOURCE,SERVICE,TIMER,TABLE,PORT,LISTENER_OWNER,PROFILE
+    if profile not in ('subscription','shadowtls'):raise ValueError('未知的 TCP 分段配置')
+    PROFILE=profile
+    short='sub' if profile=='subscription' else 'shadow'
+    TABLE='argosbx_'+short+'_mss';PORT=8443 if profile=='subscription' else 2448
+    LISTENER_OWNER='caddy' if profile=='subscription' else 'sing-box'
+    RULE=HOME/('argosbx-'+short+'-mss.nft')
+    UNIT=Path('/etc/systemd/system')/('argosbx-'+short+'-mss.service')
+    JOURNAL=HOME/('subscription-mss-journal.json' if profile=='subscription' else 'shadow-mss-journal.json')
+    LOCK=Path('/run')/('argosbx-'+short+'-mss.lock')
+    RULE_SOURCE=ROOT/'templates'/('argosbx-'+short+'-mss.nft')
+    UNIT_SOURCE=ROOT/'systemd'/('argosbx-'+short+'-mss.service')
+    SERVICE='argosbx-'+short+'-mss.service';TIMER='argosbx-'+short+'-mss-rollback.timer'
+
+def managed_binding_matches():
+    if PROFILE=='subscription':return True
+    try:
+        protocol=json.loads((HOME/'server.json').read_text())['protocols']['shadowtls']
+        return protocol.get('enabled') is True and type(protocol.get('port')) is int and protocol['port']==PORT
+    except (OSError,ValueError,KeyError,TypeError):return False
 
 def run(args,body=None,check=True):
     p=subprocess.run(args,input=body,text=True,capture_output=True,timeout=30)
@@ -38,7 +65,7 @@ def protected():
     return result
 
 def table():
-    p=run(['nft','-j','list','table','ip','argosbx_sub_mss'],check=False)
+    p=run(['nft','-j','list','table','ip',TABLE],check=False)
     return None if p.returncode else json.loads(p.stdout)
 
 def valid_table(value):
@@ -48,7 +75,7 @@ def valid_table(value):
     chains=[x['chain'] for x in objects if 'chain' in x]
     if len(rules)!=1 or len(chains)!=1:return False
     r=rules[0];c=chains[0];expr=r.get('expr',[])
-    if (r.get('family')!='ip' or r.get('table')!='argosbx_sub_mss' or r.get('chain')!='preroute'
+    if (r.get('family')!='ip' or r.get('table')!=TABLE or r.get('chain')!='preroute'
             or c.get('hook')!='prerouting' or c.get('type')!='filter' or c.get('policy')!='accept'
             or c.get('prio')!=-150 or len(expr)!=6):return False
     try:
@@ -57,7 +84,7 @@ def valid_table(value):
         tcpopt={'tcp option':{'name':'maxseg','field':'size'}}
         return (src=={'op':'!=','left':{'payload':{'protocol':'ip','field':'saddr'}},'right':src['right']}
                 and net=='127.0.0.0/8'
-                and port=={'op':'==','left':{'payload':{'protocol':'tcp','field':'dport'}},'right':8443}
+                and port=={'op':'==','left':{'payload':{'protocol':'tcp','field':'dport'}},'right':PORT}
                 and flags=={'op':'==','left':{'&':[{'payload':{'protocol':'tcp','field':'flags'}},['syn','rst']]},'right':'syn'}
                 and mss=={'op':'>','left':tcpopt,'right':1200}
                 and set(expr[4])=={'counter'} and expr[5]=={'mangle':{'key':tcpopt,'value':1200}})
@@ -65,11 +92,17 @@ def valid_table(value):
 
 def state():
     present=table()
-    return {'table_present':present is not None,'table_valid':valid_table(present),
+    result={'table_present':present is not None,'table_valid':valid_table(present),
             'service_active':run(['systemctl','is-active','--quiet',SERVICE],check=False).returncode==0,
             'service_enabled':run(['systemctl','is-enabled','--quiet',SERVICE],check=False).returncode==0,
             'rule_file_matches':RULE.is_file() and RULE.read_bytes()==RULE_SOURCE.read_bytes(),
-            'unit_file_matches':UNIT.is_file() and UNIT.read_bytes()==UNIT_SOURCE.read_bytes()}
+            'unit_file_matches':UNIT.is_file() and UNIT.read_bytes()==UNIT_SOURCE.read_bytes(),
+            'managed_binding_matches':managed_binding_matches()}
+    if PROFILE=='shadowtls':
+        listeners=run(['ss','-Hltnp','sport',':'+str(PORT)],check=False)
+        lines=listeners.stdout.splitlines()
+        result['listener_matches']=listeners.returncode==0 and bool(lines) and all(LISTENER_OWNER in x.lower() for x in lines)
+    return result
 
 def verify():
     s=state();s['verified']=all(s.values());return s
@@ -93,7 +126,7 @@ def recover():
         if stopped.returncode and run(['systemctl','is-active','--quiet',SERVICE],check=False).returncode==0:
             raise RuntimeError('无法停止订阅规则服务，保留现场')
     if table() is not None:
-        run(['nft','delete','table','ip','argosbx_sub_mss'])
+        run(['nft','delete','table','ip',TABLE])
     for path in (UNIT,RULE):
         if path.exists():path.unlink()
     run(['systemctl','daemon-reload'])
@@ -104,19 +137,20 @@ def recover():
 def stage():
     if os.geteuid()!=0:raise ValueError('需要 root 执行')
     if JOURNAL.exists():raise ValueError('已有未完成的订阅网络规则事务')
+    if not managed_binding_matches():raise ValueError('已登记的 ShadowTLS 端口与修复范围不一致')
     current=verify()
     if current['verified']:return {'already_enabled':True}
     if RULE.exists() or UNIT.exists() or current['table_present'] or current['service_active'] or current['service_enabled']:
         raise ValueError('已有同名规则或服务，拒绝覆盖')
-    listeners=run(['ss','-Hltnp','sport',':8443']).stdout.splitlines()
-    if not listeners or not all('caddy' in x.lower() for x in listeners):raise ValueError('8443 并非仅由 Caddy 监听')
+    listeners=run(['ss','-Hltnp','sport',':'+str(PORT)]).stdout.splitlines()
+    if not listeners or not all(LISTENER_OWNER in x.lower() for x in listeners):raise ValueError('目标端口的监听进程与预期不符')
     run(['nft','-c','-f','-'],RULE_SOURCE.read_text())
     baseline=protected()
     save(JOURNAL,{'rule_sha256':digest(RULE_SOURCE.read_bytes()),'unit_sha256':digest(UNIT_SOURCE.read_bytes()),'protected':baseline})
     try:
-        run(['systemd-run','--quiet','--unit=argosbx-sub-mss-rollback','--on-active=240s','--collect',
+        run(['systemd-run','--quiet','--unit='+TIMER.removesuffix('.timer'),'--on-active=240s','--collect',
              '--property=Restart=on-failure','--property=RestartSec=10s',
-             '/usr/bin/python3','-B',str(Path(__file__).resolve()),'recover'])
+             '/usr/bin/python3','-B',str(Path(__file__).resolve()),'recover','--profile',PROFILE])
         if run(['systemctl','is-active','--quiet',TIMER],check=False).returncode:raise RuntimeError('自动回滚定时器未启动')
         create(RULE,RULE_SOURCE.read_bytes());create(UNIT,UNIT_SOURCE.read_bytes())
         run(['systemd-analyze','verify',str(UNIT)])
@@ -136,7 +170,9 @@ def commit():
     return {'committed':True,'verified':True,'existing_services_restarted':False}
 
 def main():
-    p=argparse.ArgumentParser();p.add_argument('action',choices=('stage','commit','recover','verify'));a=p.parse_args()
+    p=argparse.ArgumentParser();p.add_argument('action',choices=('stage','commit','recover','verify'))
+    p.add_argument('--profile',choices=('subscription','shadowtls'),default='subscription');a=p.parse_args()
+    select_profile(a.profile)
     with lock(LOCK,timeout=30 if a.action=='recover' else 0):print(json.dumps(globals()[a.action](),ensure_ascii=False))
 
 if __name__=='__main__':

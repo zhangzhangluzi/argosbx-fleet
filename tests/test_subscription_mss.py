@@ -8,19 +8,19 @@ from unittest.mock import patch
 
 import subscription_mss as mss
 
-def fixture():
+def fixture(table='argosbx_sub_mss',port=8443):
     opt={'tcp option':{'name':'maxseg','field':'size'}}
     expr=[
         {'match':{'op':'!=','left':{'payload':{'protocol':'ip','field':'saddr'}},'right':{'prefix':{'addr':'127.0.0.0','len':8}}}},
-        {'match':{'op':'==','left':{'payload':{'protocol':'tcp','field':'dport'}},'right':8443}},
+        {'match':{'op':'==','left':{'payload':{'protocol':'tcp','field':'dport'}},'right':port}},
         {'match':{'op':'==','left':{'&':[{'payload':{'protocol':'tcp','field':'flags'}},['syn','rst']]},'right':'syn'}},
         {'match':{'op':'>','left':opt,'right':1200}},
         {'counter':{'packets':1,'bytes':60}},
         {'mangle':{'key':opt,'value':1200}},
     ]
-    return {'nftables':[{'table':{'family':'ip','name':'argosbx_sub_mss'}},
+    return {'nftables':[{'table':{'family':'ip','name':table}},
                         {'chain':{'hook':'prerouting','type':'filter','policy':'accept','prio':-150}},
-                        {'rule':{'family':'ip','table':'argosbx_sub_mss','chain':'preroute','expr':expr}}]}
+                        {'rule':{'family':'ip','table':table,'chain':'preroute','expr':expr}}]}
 
 class SubscriptionMssTest(unittest.TestCase):
     def test_rule_only_changes_new_ipv4_subscription_connections(self):
@@ -95,8 +95,8 @@ class SubscriptionMssTest(unittest.TestCase):
             state['commands'].append(args)
             code=0;out=''
             if args[:3]==['nft','-j','list']:
-                code=0 if state['table'] else 1;out=json.dumps(fixture()) if state['table'] else ''
-            elif args[:2]==['ss','-Hltnp']:out='LISTEN users:(("caddy"))\n'
+                code=0 if state['table'] else 1;out=json.dumps(fixture(mss.TABLE,mss.PORT)) if state['table'] else ''
+            elif args[:2]==['ss','-Hltnp']:out='LISTEN users:(("'+mss.LISTENER_OWNER+'"))\n'
             elif args[0]=='systemd-run':state['timer']=True
             elif args[:2]==['systemctl','is-active']:
                 code=0 if state['timer' if args[-1]==mss.TIMER else 'service'] else 3
@@ -129,5 +129,55 @@ class SubscriptionMssTest(unittest.TestCase):
             with self.assertRaises(RuntimeError):mss.stage()
         self.assertFalse(state['table']);self.assertFalse(state['service']);self.assertFalse(state['timer'])
         self.assertFalse(paths['JOURNAL'].exists());self.assertFalse(paths['RULE'].exists());self.assertFalse(paths['UNIT'].exists())
+
+    def test_shadow_profile_is_separate_and_only_changes_new_ipv4_connections(self):
+        try:
+            mss.select_profile('shadowtls')
+            rule=mss.RULE_SOURCE.read_text();unit=mss.UNIT_SOURCE.read_text()
+            for token in ('table ip argosbx_shadow_mss','ip saddr != 127.0.0.0/8','tcp dport 2448',
+                          'tcp flags & (syn | rst) == syn','tcp option maxseg size > 1200',
+                          'tcp option maxseg size set 1200'):
+                self.assertIn(token,rule)
+            self.assertNotIn('drop',rule);self.assertNotIn('reject',rule)
+            self.assertIn('ExecStop=/usr/sbin/nft delete table ip argosbx_shadow_mss',unit)
+            self.assertTrue(mss.valid_table(fixture('argosbx_shadow_mss',2448)))
+            self.assertFalse(mss.valid_table(fixture('argosbx_sub_mss',8443)))
+        finally:mss.select_profile('subscription')
+        self.assertEqual((mss.TABLE,mss.PORT),('argosbx_sub_mss',8443))
+
+    def test_shadow_stage_commit_and_port_drift_do_not_touch_subscription(self):
+        temp=tempfile.TemporaryDirectory();self.addCleanup(temp.cleanup);root=Path(temp.name)
+        try:
+            with patch.object(mss,'HOME',root):
+                mss.select_profile('shadowtls')
+                (root/'server.json').write_text(json.dumps({'protocols':{'shadowtls':{'enabled':True,'port':2448}}}))
+                paths,state,run=self.transaction()
+                with patch.multiple(mss,**paths),patch.object(mss.os,'geteuid',return_value=0), \
+                     patch.object(mss,'protected',return_value={'sb':{'MainPID':'42'}}),patch.object(mss,'run',side_effect=run):
+                    self.assertTrue(mss.stage()['staged']);self.assertTrue(mss.commit()['committed'])
+                    self.assertTrue(mss.verify()['verified'])
+                    def wrong_owner(args,body=None,check=True):
+                        if args[:2]==['ss','-Hltnp']:
+                            return subprocess.CompletedProcess(args,0,'LISTEN users:(("caddy"))\n','')
+                        return run(args,body,check)
+                    with patch.object(mss,'run',side_effect=wrong_owner):
+                        self.assertFalse(mss.verify()['verified'])
+                    (root/'server.json').write_text(json.dumps({'protocols':{'shadowtls':{'enabled':True,'port':2449}}}))
+                    self.assertFalse(mss.verify()['verified'])
+                rollback=next(c for c in state['commands'] if c[0]=='systemd-run')
+                self.assertEqual(rollback[-3:],['recover','--profile','shadowtls'])
+                self.assertFalse(any('argosbx_sub_mss' in c for args in state['commands'] for c in args))
+                self.assertFalse(any(c[:2]==['systemctl','restart'] for c in state['commands']))
+        finally:mss.select_profile('subscription')
+
+    def test_shadow_stage_refuses_unmanaged_port_before_system_mutation(self):
+        with tempfile.TemporaryDirectory() as d:
+            try:
+                with patch.object(mss,'HOME',Path(d)):
+                    mss.select_profile('shadowtls')
+                    (Path(d)/'server.json').write_text(json.dumps({'protocols':{'shadowtls':{'enabled':True,'port':2449}}}))
+                    with patch.object(mss.os,'geteuid',return_value=0),patch.object(mss,'run',side_effect=AssertionError('must not touch system')):
+                        with self.assertRaises(ValueError):mss.stage()
+            finally:mss.select_profile('subscription')
 
 if __name__=='__main__':unittest.main()

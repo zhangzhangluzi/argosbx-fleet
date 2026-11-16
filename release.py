@@ -17,6 +17,7 @@ FILES += ['systemd/argosbx-ad-refresh.service', 'systemd/argosbx-ad-refresh.time
 FILES += ['bestcf-chain.js','bestcf-shadowrocket.js','bestcf-pages-sub.js','bestcf_profiles.py',
           'bestcf_pages.py','bestcf_refresh.py','systemd/argosbx-bestcf-refresh.service',
           'systemd/argosbx-bestcf-refresh.timer']
+FILES += ['unified_external.py','unified-shadowrocket.js','unified-shadowrocket-profile.js']
 
 def package(destination):
     manifest=json.loads((ROOT/'versions.json').read_text());files=FILES+[str(p.relative_to(ROOT)) for p in sorted((ROOT/'templates').glob('*'))]

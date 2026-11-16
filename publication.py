@@ -1,6 +1,30 @@
 """Write-ahead publication journal. Unknown HTTP outcomes are recovered by readback."""
-import json
+import copy,json
 from storage import save
+
+# Sub-Store PATCH merges fields rather than removing them.  These optional
+# fields may be explicitly set to null when restoring a legacy object.
+NULLABLE_ROLLBACK_FIELDS={('file','shadowrocket-config'):{'type','sourceType','sourceName'},
+                          ('collection','all'):{'ignoreFailedRemoteSub'}}
+
+
+def restore_payload(item):
+    before=item.get('before')
+    if before is None:return None
+    result=copy.deepcopy(before)
+    for key in NULLABLE_ROLLBACK_FIELDS.get((item.get('kind'),item.get('name')),set()):
+        if key not in before and key in item.get('after',{}):result[key]=None
+    return result
+
+
+def restored_equivalent(current,item):
+    if current==item.get('before'):return True
+    before=item.get('before')
+    if before is None or not isinstance(current,dict):return False
+    normalized=copy.deepcopy(current)
+    for key in NULLABLE_ROLLBACK_FIELDS.get((item.get('kind'),item.get('name')),set()):
+        if key not in before and normalized.get(key) is None:normalized.pop(key,None)
+    return normalized==before
 
 def temporary_names(config,kind,request):
     values=request(config,'/api/'+{'sub':'subs','collection':'collections','file':'files'}[kind])
@@ -32,13 +56,13 @@ def recover(path,config,get,request,digest,owner=None):
         try:
             current=get(config,item['kind'],item['name'])
             if current==item['after']:pending.append(item)
-            elif current!=item['before']:raise ValueError('存在并发修改')
+            elif not restored_equivalent(current,item):raise ValueError('存在并发修改')
         except Exception:failures.append(item['kind']+'/'+item['name'])
     if failures:raise RuntimeError('恢复前发现冲突，尚未修改任何对象：'+','.join(failures))
     for item in pending:
         try:
-            request(config,'/api/'+item['kind']+'/'+item['name'],item['before'],'DELETE' if item['before'] is None else 'PATCH')
-            if get(config,item['kind'],item['name'])!=item['before']:raise ValueError('恢复回读不一致')
+            request(config,'/api/'+item['kind']+'/'+item['name'],restore_payload(item),'DELETE' if item['before'] is None else 'PATCH')
+            if not restored_equivalent(get(config,item['kind'],item['name']),item):raise ValueError('恢复回读不一致')
         except Exception:failures.append(item['kind']+'/'+item['name'])
     if failures:raise RuntimeError('保留日志，以下对象需恢复核对：'+','.join(failures))
     cleanup(path,j,config,request)

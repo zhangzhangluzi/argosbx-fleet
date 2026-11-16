@@ -20,8 +20,8 @@ flowchart LR
 从 GitHub Release 下载版本包和 SHA256SUMS，先校验再安装。[下载维护包](https://github.com/zhangzhangluzi/argosbx-fleet/releases/latest)
 ```sh
 sha256sum -c SHA256SUMS &&
-  tar -xzf argosbx-fleet-v1.2.48.tar.gz install.py &&
-  python3 install.py argosbx-fleet-v1.2.48.tar.gz --sha256 "$(cut -d ' ' -f1 SHA256SUMS)"
+  tar -xzf argosbx-fleet-v1.2.49.tar.gz install.py &&
+  python3 install.py argosbx-fleet-v1.2.49.tar.gz --sha256 "$(cut -d ' ' -f1 SHA256SUMS)"
 ```
 安装到 `/opt/argosbx-fleet/<版本>`，原子更新 `current` 符号链接。同一版本内容不可覆盖。升级使用相同命令；数据与凭据不在发布包内。
 ## 配置入口
@@ -186,6 +186,8 @@ XHTTP 的客户端复用配置写在该入站的 `client.reuse-settings`，导�
 `bestcf_profiles.py` 将日本自建出口从普通日本分组中独立出来，并为 Shadowrocket URI 增加链式引用及缺少中转时拒绝连接的配置。`bestcf_pages.py` 和 `bestcf-pages-sub.js` 用于保留已有国家 Pages 的订阅地址；生产连接和旧地址应先在隔离环境验收。订阅包含日本 VPS 凭据，禁止提交到 GitHub 或交给第三方订阅转换服务。
 
 聚合服务器可启用 `argosbx-bestcf-refresh.timer`，每 30 分钟调用 `bestcf_refresh.py` 检查当前订阅的两份来源及节点引用。该任务只读现有本地分享身份、写入系统日志，不重启代理进程；客户端仍须按自身设置更新订阅。入口有效性、完整链路速度和客户端原生兼容性仍需独立验收。
+
+需要把已有外部地区与日本自建 CF 链路纳入原统一订阅时，在私有 inventory 的 `subscription.external_aggregate` 中登记 `sources`（已有 Sub-Store 订阅源名称列表）、`countries`（地区名称到节点前缀列表的映射，含 `日本自建`）和 `chain_source`（日本链式来源名称）。生成器保留原自建节点与规则，外部来源和日本自建入口分别进入地区组；来源临时故障时可用的其他来源继续输出。国家单独订阅与原 URL 不改变。应用前必须通过隔离发布检查，且不得把真实订阅地址或凭据提交到仓库。
 
 ## v1.2.7：规则语义与 DNS 性能
 - BrowserLeaks、DNSLeakTest、IPLeak 的页面及子域名明确走日常线路，DNS 同步；这是用途例外，不代表 WebRTC、系统或所有 DNS 路径已经无泄漏。

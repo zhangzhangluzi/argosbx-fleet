@@ -106,6 +106,10 @@ export_processor={'type':'Response Transformer','customName':'FlClash / Stash хо
 export_processor['args']['content']=stash_compat+'\n'+export_processor['args']['content']
 for item in payload['subscriptions']+payload['collections']:
     item['process'].append(export_processor)
+if inventory['subscription'].get('external_aggregate'):
+    import unified_external
+    payload=unified_external.apply(payload,inventory['subscription']['external_aggregate'],
+                                   interval=inventory.get('health',{}).get('interval',1800))
 from fleet import STATE
 p=STATE/'substore-payload.json';save(p,payload)
 print(json.dumps({'subscriptions':len(subscriptions),'collections':len(payload['collections']),'files':len(files),'groups_per_yaml':len(countries)+6,'visible_groups_per_yaml':len(countries)+4}))

@@ -89,6 +89,11 @@ def validate(data):
             if not onboarding['certificate_host'].endswith('.'+onboarding['zone']):raise ValueError('证书域名不在所选 zone 下')
     for key in ('backend_url', 'public_url'):
         url(data['subscription'][key], key)
+    if 'external_aggregate' in data['subscription']:
+        from unified_external import validate as validate_external
+        external=validate_external(data['subscription']['external_aggregate'])
+        if sources.intersection(external['sources']):
+            raise ValueError('外部订阅源与自建服务器订阅源重名')
     backend_relay=data['subscription'].get('backend_relay')
     if backend_relay is not None:
         if (not isinstance(backend_relay,dict) or not {'port'}<=set(backend_relay) or set(backend_relay)-{'port','jump_server'}

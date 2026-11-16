@@ -21,7 +21,7 @@ from fleet import WORKSPACE, STATE, read, active_config
 
 WORK = Path(__file__).resolve().parent
 PLAN = STATE/'server-plan.json'
-VALIDATION_VERSION = 4
+VALIDATION_VERSION = 5
 
 
 from storage import save, lock
@@ -132,7 +132,17 @@ def stage(config, payload,owner=None):
     ad_domains = None
     has_ads = any(file['name'] == 'shadowrocket-ads' for file in payload['files'])
     aliases={s['name']:prefix+'-'+str(i) for i,s in enumerate(payload['subscriptions'])}
+    external=config['subscription'].get('external_aggregate') or {}
+    external_names=set(external.get('sources',[]))
+    alias=lambda name:aliases[name] if name in aliases else name
     try:
+        required_refs=set(payload['collections'][0]['subscriptions'])-set(aliases)
+        if required_refs != external_names:
+            raise ValueError('汇总配置引用了未登记的外部订阅源')
+        if external_names:
+            existing_names=set(publication.temporary_names(config,'sub',request))
+            if not external_names<=existing_names:
+                raise ValueError('已登记的外部订阅源缺失')
         for source in payload['subscriptions']:
             sub=copy.deepcopy(source);sub['name']=aliases[source['name']]
             for op in sub['process']:
@@ -140,12 +150,14 @@ def stage(config, payload,owner=None):
             creating('sub',sub['name'])
             request(config,'/api/subs',sub,'POST')
         col=copy.deepcopy(payload['collections'][0]);col['name']=prefix
-        col['subscriptions']=[aliases[n] for n in col['subscriptions']];col['process']=[]
+        col['subscriptions']=[alias(n) for n in col['subscriptions']];col['process']=[]
         creating('collection',prefix);request(config,'/api/collections',col,'POST')
         # Sub-Store's mihomoConfig file path does not forward noCache to its
         # collection. Refresh the isolated collection before validating files.
         request(config,'/download/collection/'+prefix+'?target=URI&noCache=true',raw=True)
         expected=[]
+        native_names_by_source={}
+        native_names_all=set()
         for source in payload['files']:
             if source['name']=='shadowrocket-config': continue
             f=copy.deepcopy(source);f['name']=prefix+'-'+source['name'];f['sourceName']=prefix
@@ -167,10 +179,23 @@ def stage(config, payload,owner=None):
             save(STATE/('validated-'+source['name']+'.json'),value)
             rendered[source['name']]=digest(value)
             names=[n['name'] for n in value['proxies']]
-            if expected and names!=expected:raise ValueError('两种客户端节点名称不一致')
+            if source['name']=='clash' and external_names:
+                for native_source in payload['subscriptions']:
+                    native_raw=request(config,'/download/'+aliases[native_source['name']]+'?target=ClashMeta',raw=True,user_agent='FlClash/0.8.99')
+                    standalone=yaml.safe_load(native_raw)
+                    native_names_by_source[native_source['name']]={n['name'] for n in standalone['proxies']}
+                native_names_all=set().union(*native_names_by_source.values())
+                rendered['external-native-names']=json.dumps(sorted(native_names_all),ensure_ascii=False)
+            if expected and ((set(names)&native_names_all)!=(set(expected)&native_names_all) if external_names else names!=expected):
+                raise ValueError('两种客户端自建节点名称不一致')
             expected=names
-            if source['name']=='stash':rendered.update(check_stash_file_cases(config,f['name'],value))
-        sr=next(f['content'] for f in payload['files'] if f['name']=='shadowrocket-config')
+            if source['name']=='stash':rendered.update(check_stash_file_cases(config,f['name'],value,native_names_all if external_names else None))
+        srfile=next(f for f in payload['files'] if f['name']=='shadowrocket-config')
+        if srfile.get('type')=='mihomoConfig':
+            staged_sr=copy.deepcopy(srfile);staged_sr['name']=prefix+'-shadowrocket-config';staged_sr['sourceName']=prefix
+            creating('file',staged_sr['name']);request(config,'/api/files',staged_sr,'POST')
+            sr=request(config,'/api/file/'+staged_sr['name'],raw=True,user_agent='Shadowrocket/2.2.70')
+        else:sr=srfile['content']
         if ad_domains is not None:
             ad_rules.check_shadowrocket(sr, ad_domains, config['subscription']['backend_url'].rstrip('/')+'/api/file/shadowrocket-ads')
         body=sr.split('[Proxy Group]',1)[1].split('\n[',1)[0]
@@ -178,13 +203,17 @@ def stage(config, payload,owner=None):
         for line in body.splitlines():
             if '= url-test,' in line:
                 sr_names += [x.strip() for x in line.split('= url-test,',1)[1].split(',') if '=' not in x]
-        if set(sr_names)!=set(expected):raise ValueError('Shadowrocket 分组与实际节点不一致')
+        if external_names:
+            if not native_names_all<=set(sr_names) or any(name.startswith('CF入口-') for name in sr_names):
+                raise ValueError('Shadowrocket 自建节点分组不一致')
+        elif set(sr_names)!=set(expected):raise ValueError('Shadowrocket 分组与实际节点不一致')
         rendered['shadowrocket-config']=digest(sr)
+        if external_names:save(STATE/'validated-shadowrocket-config.json',{'content':sr})
         if any(op['type']=='Response Transformer' for op in payload['collections'][0].get('process',[])):
             # Exercise the actual download route as well as the canonical files.
             # Native node conversion alone did not verify a full Stash profile.
             col=copy.deepcopy(payload['collections'][0]);col['name']=prefix
-            col['subscriptions']=[aliases[n] for n in col['subscriptions']]
+            col['subscriptions']=[alias(n) for n in col['subscriptions']]
             for op in col['process']:
                 if op['type']=='Response Transformer':op['args']['arguments'].update(profile=prefix+'-clash',stash_profile=prefix+'-stash')
             request(config,'/api/collection/'+prefix,col,'PATCH')
@@ -195,22 +224,32 @@ def stage(config, payload,owner=None):
                 check_profile(value)
                 full=json.loads((STATE/('validated-'+('stash' if target=='Stash' else 'clash')+'.json')).read_text())
                 expected=stash_expected_profile(full,key!='download-stash') if target=='Stash' else full
-                check_equivalent_profile(value,expected,key)
+                if external_names:
+                    import unified_external
+                    native=[n for n in native_names_all if n in {p['name'] for p in expected['proxies']}]
+                    unified_external.check_dynamic_profile(value,expected,native)
+                else:check_equivalent_profile(value,expected,key)
                 rendered[key]=digest(value)
         for country in payload['collections'][1:]:
             col=copy.deepcopy(country);col['name']=prefix+'-'+country['name']
             for op in col['process']:
                 if op['type']=='Response Transformer':op['args']['arguments'].update(profile=prefix+'-clash',stash_profile=prefix+'-stash')
-            col['subscriptions']=[aliases[n] for n in country['subscriptions']]
+            col['subscriptions']=[alias(n) for n in country['subscriptions']]
             creating('collection',col['name']);request(config,'/api/collections',col,'POST')
             prefixes=[s['name'] for s in active_config(config)['servers'] if s['subscription']['name'] in country['subscriptions']]
+            native_names=None
+            if external_names:
+                native_names=set()
+                for sub in country['subscriptions']:
+                    native_names.update(native_names_by_source[sub])
             for key,(target,ua) in DOWNLOAD_CASES.items():
                 raw=request(config,'/download/collection/'+col['name']+'?target='+target,raw=True,user_agent=ua)
                 stash_refresh.check(raw)
                 value=yaml.safe_load(raw)
                 full=json.loads((STATE/('validated-'+('stash' if target=='Stash' else 'clash')+'.json')).read_text())
                 expected=stash_expected_profile(full,key!='download-stash') if target=='Stash' else full
-                expected=subset_profile(expected,[n for n in expected['proxies'] if any(n['name'].startswith(p+'-T-') or n['name'].startswith(p+'-U-') for p in prefixes)])
+                expected=subset_profile(expected,[n for n in expected['proxies'] if n['name'] in native_names] if native_names is not None
+                                        else [n for n in expected['proxies'] if any(n['name'].startswith(p+'-T-') or n['name'].startswith(p+'-U-') for p in prefixes)])
                 check_equivalent_profile(value,expected,country['name']+'/'+key)
                 rendered['country-profile:'+country['name']+':'+key]=digest(value)
             uri=request(config,'/download/collection/'+col['name']+'?target=URI',raw=True)
@@ -239,13 +278,17 @@ def stash_file(config,name,user_agent):
     return raw
 
 
-def check_stash_file_cases(config,name,full):
+def check_stash_file_cases(config,name,full,native_names=None):
     import yaml
     rendered={}
     for key,ua in STASH_FILE_CASES.items():
         value=yaml.safe_load(stash_file(config,name,ua))
         expected=stash_expected_profile(full,key=='file-stash-mac-modern')
-        check_equivalent_profile(value,expected,key)
+        if native_names is not None:
+            import unified_external
+            present={p['name'] for p in expected['proxies']}
+            unified_external.check_dynamic_profile(value,expected,list(set(native_names)&present))
+        else:check_equivalent_profile(value,expected,key)
         rendered[key]=digest(value)
     return rendered
 
@@ -332,16 +375,31 @@ def read_public(url,user_agent,timeout=45):
 
 def verify_published(config,plan):
     import yaml
+    external=bool(config['subscription'].get('external_aggregate'))
+    native_names=json.loads(plan['rendered_sha256']['external-native-names']) if external else []
+    if external:import unified_external
+    def compare_dynamic(value,expected):
+        present={p['name'] for p in expected['proxies']}
+        unified_external.check_dynamic_profile(value,expected,list(set(native_names)&present))
     for fmt in ['clash','stash']:
         raw=stash_file(config,fmt,'Stash/3.6.0') if fmt=='stash' else request(config,'/api/file/'+fmt,raw=True)
         value=yaml.safe_load(raw)
         check_profile(value)
         ad_rules.check_profile(value, fmt)
-        if digest(value)!=plan['rendered_sha256'][fmt]:raise ValueError('线上输出与已校验计划不符')
+        if external:
+            compare_dynamic(value,json.loads((STATE/('validated-'+fmt+'.json')).read_text()))
+        elif digest(value)!=plan['rendered_sha256'][fmt]:raise ValueError('线上输出与已校验计划不符')
         if fmt=='stash':
-            for key,sha in check_stash_file_cases(config,fmt,value).items():
-                if sha!=plan['rendered_sha256'][key]:raise ValueError('Stash 文件输出与已校验计划不符：'+key)
-    if digest(request(config,'/api/file/shadowrocket-config',raw=True))!=plan['rendered_sha256']['shadowrocket-config']:
+            for key,sha in check_stash_file_cases(config,fmt,value,native_names if external else None).items():
+                if not external and sha!=plan['rendered_sha256'][key]:raise ValueError('Stash 文件输出与已校验计划不符：'+key)
+    sr=request(config,'/api/file/shadowrocket-config',raw=True)
+    if external:
+        baseline=json.loads((STATE/'validated-shadowrocket-config.json').read_text())['content']
+        if sr.split('[Proxy Group]',1)[0]!=baseline.split('[Proxy Group]',1)[0]:
+            raise ValueError('Shadowrocket 原规则发生变化')
+        if any(name not in sr for name in native_names):raise ValueError('Shadowrocket 缺少自建节点')
+        unified_external.check_shadowrocket_chains(request(config,'/download/collection/all?target=URI',raw=True,user_agent='Shadowrocket/2.2.70'))
+    elif digest(sr)!=plan['rendered_sha256']['shadowrocket-config']:
         raise ValueError('Shadowrocket 策略与已校验计划不符')
     if 'shadowrocket-ads' in plan['rendered_sha256']:
         raw=request(config,'/api/file/shadowrocket-ads',raw=True);check_sr_ads(raw)
@@ -353,7 +411,11 @@ def verify_published(config,plan):
         stash_refresh.check(raw,refresh)
         value=yaml.safe_load(raw)
         check_profile(value)
-        if digest(value)!=plan['rendered_sha256'][key]:raise ValueError('客户端导出与已校验计划不符：'+key)
+        if external:
+            full=json.loads((STATE/('validated-'+('stash' if target=='Stash' else 'clash')+'.json')).read_text())
+            expected=stash_expected_profile(full,key!='download-stash') if target=='Stash' else full
+            compare_dynamic(value,expected)
+        elif digest(value)!=plan['rendered_sha256'][key]:raise ValueError('客户端导出与已校验计划不符：'+key)
     for key,wanted in plan['rendered_sha256'].items():
         if not key.startswith('country-profile:'):continue
         _,name,case=key.split(':');target,ua=DOWNLOAD_CASES[case]
@@ -368,12 +430,15 @@ def verify_published(config,plan):
         if digest(value)!=wanted:raise ValueError('国家订阅与已校验计划不符：'+name)
     public=config['subscription']['public_url']
     value=yaml.safe_load(read_public(public,'FlClash/0.8.99'))
-    if value!=yaml.safe_load(request(config,'/api/file/clash',raw=True)):
-        raise ValueError('原统一订阅回读不一致')
+    direct=yaml.safe_load(request(config,'/api/file/clash',raw=True))
+    if external:compare_dynamic(value,direct)
+    elif value!=direct:raise ValueError('原统一订阅回读不一致')
     stash_url=stash_refresh.update_url('stash',public)
     raw=read_public(stash_url,'Mozilla/5.0')
     stash_refresh.check(raw,stash_url)
-    check_equivalent_profile(yaml.safe_load(raw),yaml.safe_load(stash_file(config,'stash','Mozilla/5.0')),'原统一 Stash 订阅')
+    value=yaml.safe_load(raw);direct=yaml.safe_load(stash_file(config,'stash','Mozilla/5.0'))
+    if external:compare_dynamic(value,direct)
+    else:check_equivalent_profile(value,direct,'原统一 Stash 订阅')
 
 
 def publish(config,defer_commit=False,owner=None):

@@ -14,6 +14,9 @@ FILES += ['udp6_redirect.py','systemd/argosbx-udp6-hy2-redirect.service']
 FILES += ['standalone_alias_routes.py','standalone_install.py','standalone_routes.py',
           'standard_provider_install.py','standard_provider_routes.py','standard_provider_update.py','standard_rule_source.py']
 FILES += ['systemd/argosbx-ad-refresh.service', 'systemd/argosbx-ad-refresh.timer', 'systemd/argosbx-ad-alert@.service']
+FILES += ['bestcf-chain.js','bestcf-shadowrocket.js','bestcf-pages-sub.js','bestcf_profiles.py',
+          'bestcf_pages.py','bestcf_refresh.py','systemd/argosbx-bestcf-refresh.service',
+          'systemd/argosbx-bestcf-refresh.timer']
 
 def package(destination):
     manifest=json.loads((ROOT/'versions.json').read_text());files=FILES+[str(p.relative_to(ROOT)) for p in sorted((ROOT/'templates').glob('*'))]

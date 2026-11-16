@@ -1,0 +1,11 @@
+[Unit]
+Description=Periodic Japan CF source refresh
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=2h
+RandomizedDelaySec=3min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

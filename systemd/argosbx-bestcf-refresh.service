@@ -1,0 +1,8 @@
+[Unit]
+Description=Refresh and validate Japan CF subscription sources
+After=network-online.target sub-store.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 -B /opt/argosbx-fleet/current/bestcf_refresh.py
+TimeoutStartSec=75

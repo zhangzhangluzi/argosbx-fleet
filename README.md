@@ -20,8 +20,8 @@ flowchart LR
 从 GitHub Release 下载版本包和 SHA256SUMS，先校验再安装。[下载维护包](https://github.com/zhangzhangluzi/argosbx-fleet/releases/latest)
 ```sh
 sha256sum -c SHA256SUMS &&
-  tar -xzf argosbx-fleet-v1.2.45.tar.gz install.py &&
-  python3 install.py argosbx-fleet-v1.2.45.tar.gz --sha256 "$(cut -d ' ' -f1 SHA256SUMS)"
+  tar -xzf argosbx-fleet-v1.2.46.tar.gz install.py &&
+  python3 install.py argosbx-fleet-v1.2.46.tar.gz --sha256 "$(cut -d ' ' -f1 SHA256SUMS)"
 ```
 安装到 `/opt/argosbx-fleet/<版本>`，原子更新 `current` 符号链接。同一版本内容不可覆盖。升级使用相同命令；数据与凭据不在发布包内。
 ## 配置入口
@@ -205,7 +205,7 @@ sudo python3 -B /opt/argosbx-fleet/current/udp_buffers.py apply --effective-byte
 ## v1.2.12：新服务器默认修复 UDP 缓冲
 一键接入的 `onboard → bootstrap` 流程在启动协议之前自动设置 `net.core.rmem_default` 至少为有效 2 MiB，并将不足的 `net.core.rmem_max` 补齐到该值；已有更大的值保持。默认值和上限均写入原有 sysctl 文件，后续 Salamander 及 UDP 转发套接字直接继承。发送缓冲、拥塞控制和协议参数不变。
 初始化会检查内核读回值、新套接字实际缓冲、持久化内容及启动后的 sing-box 套接字。默认值设置阶段失败会恢复本次设置并停止安装；后续进程校验失败也会阻止安装成功，不会隐式重启服务。未恢复完成时保留事务，使用 `udp_buffers.py recover` 后续装。断点续装保持已验收参数，旧版未完成安装已运行的小缓冲按现有热调整流程修复，不重启连接。
-普通 `install.py` 发布包升级不调用初始化和调优；已经完成的旧版 `bootstrap` 返回 `legacy-install-unchanged`，已有机器仍需显式启用。因此升级维护代码不会更改台湾、美国或其他现有服务器的内核参数，日本已持久化的修复继续保留。
+普通 `install.py` 发布包升级不调用初始化和调优；已经完成的旧版 `bootstrap` 返回 `legacy-install-unchanged`，已有机器仍需显式启用。因此升级维护代码不会更改现有服务器的内核参数，已持久化的修复继续保留。
 
 ## v1.2.13：补齐 Xray UDP 转发缓冲检查
 新默认值不会追溯改变长期运行的 Xray UDP 转发套接字。`udp_buffers.py` 现支持通过 `--service sb|xr|argosbx-reality443|argosbx-xhttp` 检查或热调整指定原生代理服务，省略时仍为 `sb`：
@@ -221,7 +221,7 @@ python3 fleetctl.py diagnose --config /private/servers.json --server jp
 python3 fleetctl.py certificate-audit --config /private/servers.json --server jp
 python3 fleetctl.py cf-audit --config /private/servers.json --server jp
 ```
-诊断复用现有入站和独立 VPS 上的短期回环客户端，不新增公网端口、不调整防火墙、TUN、系统 DNS 或活动 VPN。`--observer tw` 可指定另一台具备所需 IP 地址族的已启用服务器；默认分别为 v4/v6 选择可用验收端。先读取本机监听、服务 PID 和累计网络计数，再分别验证 TCP 建连、原生协议 HTTPS、实际出口和 UDP 转发，最后对比丢包增量。TCP 承载的 UDP 转发与 HY2 的 UDP 入站分开报告；UDP 没有原生协议响应不能判定端口可用。未使用抓包时 SYN 到达位置和云防火墙状态明确标为未观察；海外 VPS 观察结果不能代替大陆运营商测试，也不能直接证明整个 IP 被封。仅采集现有套接字元数据，不采集业务载荷。
+诊断复用现有入站和独立 VPS 上的短期回环客户端，不新增公网端口、不调整防火墙、TUN、系统 DNS 或活动 VPN。`--observer jp` 可在检查其他服务器时指定日本服务器，验收端必须具备所需的 IP 地址族并处于启用状态；默认分别为 v4/v6 选择可用验收端。先读取本机监听、服务 PID 和累计网络计数，再分别验证 TCP 建连、原生协议 HTTPS、实际出口和 UDP 转发，最后对比丢包增量。TCP 承载的 UDP 转发与 HY2 的 UDP 入站分开报告；UDP 没有原生协议响应不能判定端口可用。未使用抓包时 SYN 到达位置和云防火墙状态明确标为未观察；海外 VPS 观察结果不能代替大陆运营商测试，也不能直接证明整个 IP 被封。仅采集现有套接字元数据，不采集业务载荷。
 证书验收检查有效期、名称、私钥、Caddy 管理存储及稳定文件引用，再从独立服务器与实际 TCP／QUIC 入口对比。AnyTLS 使用标准 TLS 验证并比对整张叶子证书 SHA256；HY2／Salamander 使用已有 Xray 二进制的隔离客户端，固定整张叶子指纹并完成认证与 HTTPS。没有新增服务协议、跳过证书验证或使用仅公钥指纹冒充续期验收。失败可能是路径或握手异常，不自动宣称旧证书，更不自动重启；命令不强制续期、不更换证书。`diagnostic-source` 为内部私有 SSH 数据，含节点认证信息，不应保存到公开日志；公开结果不包含节点凭据或私钥。
 CF 审计仅使用 GET：检查授权 zone、对应 DNS 记录与已有隧道配置；分别验证用户或账户 Token。能读取 Token 详细策略时核对目标资源范围、DNS／Tunnel 写权限声明、有效期和 IP 过滤；无策略读取权限时如实输出 `not_verified`。Token Verify 不证明资源写权限，读取成功也不证明 DNS Edit；策略声明不等于执行过真实写操作。纯 DNS-01 可使用指定 Zone ID 的限定 DNS Edit Token，Fleet 域名发现和固定隧道管理还需要 Zone Read／Tunnel Edit。管理 Token 只在控制机 0600 文件读取，不上传 VPS；实际 API 请求出口未观察时不会声称白名单匹配。现有服务不因审计失败而停止。
 
@@ -250,7 +250,7 @@ python3 fleetctl.py dependency-audit --server all --verify-writes --output /priv
 ```
 也可将 `all` 改成单台服务器 ID。默认只读，不创建 CF 资源，不强制签发或续签证书，不加载、重启服务，不发布订阅。使用现有临时原生客户端验证 TLS／CF 业务，结束后清理；不建立 TUN 或更改当前 VPN。成功退出 0，检查未通过退出 2，参数或启动错误退出 1。报告原子写入为 0600，禁止覆盖输入配置、令牌、策略快照和 SSH 信任文件。
 逐台读取 Caddy 的实际进程配置及环境，只输出必要的依赖事实：ACME 验证方式、CA 目录连通性、服务用户对证书存储的写权限、证书文件引用与热加载、其他活动续期任务，以及连接器凭据与管理令牌是否独立。只向 VPS 发送管理令牌的 SHA256 用于内存比较，不发送令牌值，不回传连接器凭据或 DNS provider 密钥。DNS-01、外部续期任务、静态证书或不能确认的存储均提示单独核验，不会冒充 HTTP-01 已通过。
-复用证书审计，覆盖协议端口、源订阅和 Caddy 的所有托管域名；独立服务器核对当前证书完整指纹，并检查 HTTP-01 的 TCP 80／Host 可达性。HTTP 404 只代表到达 Caddy，不代表完成 ACME 授权；报告明确 `real_acme_validation=false`、`forced_renewal=false`。台湾／日本的探测端优先互相选择，避免仅因美国验收端离线就声称另外两台续期损坏。
+复用证书审计，覆盖协议端口、源订阅和 Caddy 的所有托管域名；独立服务器核对当前证书完整指纹，并检查 HTTP-01 的 TCP 80／Host 可达性。HTTP 404 只代表到达 Caddy，不代表完成 ACME 授权；报告明确 `real_acme_validation=false`、`forced_renewal=false`。探测端按服务器启用状态和地址族选择；没有合适的独立探测端时应明确报告，不能据此判定证书损坏。
 CF 请求必须经过 inventory 的管理出口；检查同通道实测源 IPv4及各已登记非管理 IPv4来源的 `/zones` 拒绝结果。逐台校验直连 DNS、证书域名源站、固定隧道路由、隧道健康与 CF／XHTTP 的 HTTPS、出口和 UDP 业务。策略快照过期或缺少 Token Details 权限仍保留为 `not_verified/partial`；功能验收范围是实际读写与来源允许／拒绝，不宣称已完整枚举令牌权限或所有白名单地址。默认 `write_access.status=not_tested`；显式写验收按 zone/account 去重并复用原有恢复日志，失败后按报告中的 `cf-audit --server <ID> --recover-writes` 恢复。
 验收前后对比代理／Caddy／连接器 PID、重启计数、原生配置、Caddy 完整适配配置及源订阅哈希，发现漂移即停止通过。美国管理通道故障仅说明 CF API 维护不可用；HTTP-01 和独立连接器凭据的独立性必须由各自检查证明。不会因管理检查失败而自动更换出口、扩大白名单或重启服务。
 

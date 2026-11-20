@@ -25,14 +25,25 @@ def check(body):
     doc = yaml.safe_load(body)
     proxies = doc.get('proxies', []) if isinstance(doc, dict) else []
     entries = {p.get('name') for p in proxies if p.get('name', '').startswith('CF入口-')}
-    exits = [p for p in proxies if p.get('name', '').startswith('JP-T-v4-CF-自建-')]
     groups = doc.get('proxy-groups', []) if isinstance(doc, dict) else []
     group = next((g for g in groups if g.get('name') == '地区-日本自建'), None)
-    if (len(entries) < 2 or len(exits) < 2 or not group or group.get('interval') != 1800 or
-            any(not p.get('reality-opts') or p.get('dialer-proxy') not in entries for p in exits) or
-            not all(any(source in p['name'] for p in exits) for source in ('Mia', 'Qilin'))):
-        raise ValueError('Japan CF chain is incomplete')
-    return len(entries), len(exits)
+    members = set(group.get('proxies', [])) if group else set()
+    exits = [p for p in proxies if p.get('name') in members]
+    if not exits or not group or group.get('interval') != 1800 or {p['name'] for p in exits} != members:
+        raise ValueError('Japan CF group is incomplete')
+    if entries:
+        if any(not p.get('reality-opts') or p.get('dialer-proxy') not in entries for p in exits):
+            raise ValueError('Japan CF chain is incomplete')
+        return len(entries), len(exits)
+    host = 'alllllcccd.pages.dev'
+    for node in exits:
+        ws = node.get('ws-opts', {})
+        if (node.get('type') != 'vless' or node.get('network') != 'ws' or node.get('tls') is not True or
+                node.get('servername') != host or node.get('skip-cert-verify') is True or
+                ws.get('path') != '/' or ws.get('headers', {}).get('Host') != host or
+                {'reality-opts', 'dialer-proxy', 'underlying-proxy', 'flow'} & node.keys()):
+            raise ValueError('Japan CF node does not use the fixed T26 route')
+    return len(exits), len(exits)
 
 
 def refresh(state=STATE):
@@ -49,7 +60,7 @@ def refresh(state=STATE):
 if __name__ == '__main__':
     try:
         entries, exits = refresh()
-        print('Japan CF source refresh verified:', entries, 'entrances,', exits, 'chains')
+        print('Japan CF source refresh verified:', entries, 'entrances,', exits, 'nodes')
     except Exception as error:
         print('Japan CF source refresh failed:', type(error).__name__)
         raise SystemExit(1)

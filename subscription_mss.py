@@ -25,18 +25,22 @@ PORT=8443
 LISTENER_OWNER='caddy'
 PROFILE='subscription'
 PROTECTED=('xr','sb','argo','argosbx-xhttp','caddy-sub','sub-store')
+PROFILES={
+    'subscription':('sub',8443,'caddy','subscription-mss-journal.json'),
+    'shadowtls':('shadow',2448,'sing-box','shadow-mss-journal.json'),
+    'anytls':('anytls',2447,'sing-box','anytls-mss-journal.json'),
+}
 
 def select_profile(profile):
     """Select an independent profile before acquiring its lock or changing state."""
     global RULE,UNIT,JOURNAL,LOCK,RULE_SOURCE,UNIT_SOURCE,SERVICE,TIMER,TABLE,PORT,LISTENER_OWNER,PROFILE
-    if profile not in ('subscription','shadowtls'):raise ValueError('未知的 TCP 分段配置')
+    if profile not in PROFILES:raise ValueError('未知的 TCP 分段配置')
     PROFILE=profile
-    short='sub' if profile=='subscription' else 'shadow'
-    TABLE='argosbx_'+short+'_mss';PORT=8443 if profile=='subscription' else 2448
-    LISTENER_OWNER='caddy' if profile=='subscription' else 'sing-box'
+    short,PORT,LISTENER_OWNER,journal=PROFILES[profile]
+    TABLE='argosbx_'+short+'_mss'
     RULE=HOME/('argosbx-'+short+'-mss.nft')
     UNIT=Path('/etc/systemd/system')/('argosbx-'+short+'-mss.service')
-    JOURNAL=HOME/('subscription-mss-journal.json' if profile=='subscription' else 'shadow-mss-journal.json')
+    JOURNAL=HOME/journal
     LOCK=Path('/run')/('argosbx-'+short+'-mss.lock')
     RULE_SOURCE=ROOT/'templates'/('argosbx-'+short+'-mss.nft')
     UNIT_SOURCE=ROOT/'systemd'/('argosbx-'+short+'-mss.service')
@@ -45,7 +49,7 @@ def select_profile(profile):
 def managed_binding_matches():
     if PROFILE=='subscription':return True
     try:
-        protocol=json.loads((HOME/'server.json').read_text())['protocols']['shadowtls']
+        protocol=json.loads((HOME/'server.json').read_text())['protocols'][PROFILE]
         return protocol.get('enabled') is True and type(protocol.get('port')) is int and protocol['port']==PORT
     except (OSError,ValueError,KeyError,TypeError):return False
 
@@ -98,7 +102,7 @@ def state():
             'rule_file_matches':RULE.is_file() and RULE.read_bytes()==RULE_SOURCE.read_bytes(),
             'unit_file_matches':UNIT.is_file() and UNIT.read_bytes()==UNIT_SOURCE.read_bytes(),
             'managed_binding_matches':managed_binding_matches()}
-    if PROFILE=='shadowtls':
+    if PROFILE!='subscription':
         listeners=run(['ss','-Hltnp','sport',':'+str(PORT)],check=False)
         lines=listeners.stdout.splitlines()
         result['listener_matches']=listeners.returncode==0 and bool(lines) and all(LISTENER_OWNER in x.lower() for x in lines)
@@ -137,7 +141,7 @@ def recover():
 def stage():
     if os.geteuid()!=0:raise ValueError('需要 root 执行')
     if JOURNAL.exists():raise ValueError('已有未完成的订阅网络规则事务')
-    if not managed_binding_matches():raise ValueError('已登记的 ShadowTLS 端口与修复范围不一致')
+    if not managed_binding_matches():raise ValueError('已登记的协议端口与修复范围不一致')
     current=verify()
     if current['verified']:return {'already_enabled':True}
     if RULE.exists() or UNIT.exists() or current['table_present'] or current['service_active'] or current['service_enabled']:
@@ -171,7 +175,7 @@ def commit():
 
 def main():
     p=argparse.ArgumentParser();p.add_argument('action',choices=('stage','commit','recover','verify'))
-    p.add_argument('--profile',choices=('subscription','shadowtls'),default='subscription');a=p.parse_args()
+    p.add_argument('--profile',choices=PROFILES,default='subscription');a=p.parse_args()
     select_profile(a.profile)
     with lock(LOCK,timeout=30 if a.action=='recover' else 0):print(json.dumps(globals()[a.action](),ensure_ascii=False))
 

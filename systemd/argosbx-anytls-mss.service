@@ -1,0 +1,13 @@
+[Unit]
+Description=Bound TCP segment size for new AnyTLS connections
+After=network-online.target ufw.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/argosbx-fleet/argosbx-anytls-mss.nft
+ExecStop=/usr/sbin/nft delete table ip argosbx_anytls_mss
+
+[Install]
+WantedBy=multi-user.target

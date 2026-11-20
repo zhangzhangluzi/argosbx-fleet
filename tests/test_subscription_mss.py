@@ -180,4 +180,20 @@ class SubscriptionMssTest(unittest.TestCase):
                         with self.assertRaises(ValueError):mss.stage()
             finally:mss.select_profile('subscription')
 
+    def test_anytls_does_not_accept_the_shadowtls_binding(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d)
+            try:
+                with patch.object(mss,'HOME',root):
+                    mss.select_profile('anytls')
+                    self.assertEqual((mss.TABLE,mss.PORT),('argosbx_anytls_mss',2447))
+                    config=root/'server.json'
+                    config.write_text(json.dumps({'protocols':{'shadowtls':{'enabled':True,'port':2447}}}))
+                    self.assertFalse(mss.managed_binding_matches())
+                    config.write_text(json.dumps({'protocols':{'anytls':{'enabled':True,'port':2447}}}))
+                    self.assertTrue(mss.managed_binding_matches())
+                    self.assertTrue(mss.valid_table(fixture('argosbx_anytls_mss',2447)))
+                    self.assertFalse(mss.valid_table(fixture('argosbx_anytls_mss',2448)))
+            finally:mss.select_profile('subscription')
+
 if __name__=='__main__':unittest.main()

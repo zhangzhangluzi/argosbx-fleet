@@ -9,7 +9,8 @@ FILES += ['udp_buffers.py','diagnostics.py','certificates.py','cf_audit.py','cf_
 FILES += ['reality_compat.py','vmess_compat.py','ad_rules.py','ad_delivery.py','ad_monitor.py','ad_setup.py']
 FILES += ['stash_refresh.py']
 FILES += ['backend_transport.py']
-FILES += ['subscription_mss.py','systemd/argosbx-sub-mss.service','systemd/argosbx-shadow-mss.service']
+FILES += ['subscription_mss.py','systemd/argosbx-sub-mss.service','systemd/argosbx-shadow-mss.service',
+          'systemd/argosbx-anytls-mss.service']
 FILES += ['udp6_redirect.py','systemd/argosbx-udp6-hy2-redirect.service']
 FILES += ['standalone_alias_routes.py','standalone_install.py','standalone_routes.py',
           'standard_provider_install.py','standard_provider_routes.py','standard_provider_update.py','standard_rule_source.py']

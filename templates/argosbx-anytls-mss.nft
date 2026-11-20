@@ -1,0 +1,6 @@
+table ip argosbx_anytls_mss {
+ chain preroute {
+  type filter hook prerouting priority mangle; policy accept;
+  ip saddr != 127.0.0.0/8 tcp dport 2447 tcp flags & (syn | rst) == syn tcp option maxseg size > 1200 counter tcp option maxseg size set 1200
+ }
+}

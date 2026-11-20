@@ -139,6 +139,24 @@ def patch_literal(script, marker, update):
     return script[:offset] + json.dumps(update(value), ensure_ascii=False) + script[offset+size:]
 
 
+def patch_shadowrocket_literal(script, anchor, update):
+    decoder = json.JSONDecoder()
+    matches = []
+    for assignment in re.finditer(r'(?m)^[ \t]*input\.\$content[ \t]*=[ \t]*(?=")', script):
+        start = assignment.end()
+        try:
+            value, end = decoder.raw_decode(script, start)
+        except json.JSONDecodeError:
+            continue
+        head, section, rules = value.partition('[Rule]\n')
+        if section and '[General]\n' in head and anchor in rules.split('\n[', 1)[0].splitlines():
+            matches.append((start, end, value))
+    if len(matches) != 1:
+        raise ValueError('Shadowrocket 托管广告配置不唯一或缺失')
+    start, end, value = matches[0]
+    return script[:start] + json.dumps(update(value), ensure_ascii=False) + script[end:]
+
+
 def ads_url(settings, prefix):
     if not prefix:
         return settings['backend_url'] + '/api/file/shadowrocket-ads'
@@ -151,16 +169,17 @@ def candidate(before, settings, previous, desired, snapshot, prefix, fmt):
         value.update(ad_rules.file_object(value['name'], value['displayName'], snapshot))
         return value
 
+    anchor = 'DOMAIN-SET,' + ads_url(settings, prefix) + ',REJECT' if fmt == 'shadowrocket-config' else None
+
     def update_shadowrocket(content):
         begin = content.index('[Rule]\n') + len('[Rule]\n')
         end = content.find('\n[', begin)
         end = len(content) if end < 0 else end
         rules = content[begin:end]
-        anchor = 'DOMAIN-SET,' + ads_url(settings, prefix) + ',REJECT'
         replaced = '\n'.join(replace_exceptions(rules.splitlines(), previous, desired, anchor))
         return content[:begin] + replaced + ('\n' if rules.endswith('\n') else '') + content[end:]
 
-    if fmt == 'shadowrocket-config' and not prefix:
+    if fmt == 'shadowrocket-config' and not prefix and not value.get('process'):
         value['content'] = update_shadowrocket(value['content'])
         return value
 
@@ -175,9 +194,10 @@ def candidate(before, settings, previous, desired, snapshot, prefix, fmt):
         ad_rules.use_provider(profile, asset_config(settings), snapshot)
         return profile
 
-    marker, update = (('input.$content=', update_shadowrocket) if fmt == 'shadowrocket-config'
-                      else ('const config=', update_profile))
-    args['content'] = patch_literal(args['content'], marker, update)
+    if fmt == 'shadowrocket-config':
+        args['content'] = patch_shadowrocket_literal(args['content'], anchor, update_shadowrocket)
+    else:
+        args['content'] = patch_literal(args['content'], 'const config=', update_profile)
     return value
 
 

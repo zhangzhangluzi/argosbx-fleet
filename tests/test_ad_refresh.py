@@ -1,4 +1,5 @@
 """Regression tests for managed ad exceptions and failed rule releases."""
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -7,9 +8,44 @@ from unittest.mock import patch
 import ad_delivery
 import ad_rules
 from dns_policy import console_dns
+from unified_external import patch_shadowrocket
 
 
 class AdRefreshTests(unittest.TestCase):
+    def test_external_shadowrocket_updates_only_the_managed_assignment(self):
+        prefix = 'external-seven-'
+        settings = {'backend_url': 'https://subscriptions.example/fixture',
+                    'external_ads_url': 'https://subscriptions.example/share/file/external-seven-shadowrocket-ads'}
+        anchor = 'DOMAIN-SET,' + ad_delivery.ads_url(settings, prefix) + ',REJECT'
+        old = '[General]\n[Rule]\nDOMAIN,old.example,DIRECT\n' + anchor + '\nMATCH,日常线路\n'
+        decode = ' input.$content = ' + json.dumps(old, ensure_ascii=False)
+        tail = "+'\\n'+lines.join('\\n');\n input.$content=input.$content.replace(/^example$/m,'');\n"
+        unrelated = ' input.$content = ' + json.dumps(old.replace(anchor, 'DOMAIN,other.example,REJECT')) + ';\n'
+        script = unrelated + decode + tail
+        original = {'process': [{'type': 'Script Operator', 'args': {'content': script}}]}
+        after = ad_delivery.candidate(original, settings, {'old.example': 'DIRECT'},
+                                      {'new.example': '日常线路'}, {}, prefix, 'shadowrocket-config')
+        expected = old.replace('DOMAIN,old.example,DIRECT', 'DOMAIN,new.example,日常线路')
+        self.assertEqual(after['process'][0]['args']['content'],
+                         unrelated + ' input.$content = ' + json.dumps(expected, ensure_ascii=False) + tail)
+        self.assertEqual(original['process'][0]['args']['content'], script)
+        for other in (unrelated, script + decode + ';\n'):
+            with self.subTest(has_ambiguous_profile=other != unrelated), self.assertRaisesRegex(
+                    ValueError, '托管广告配置不唯一或缺失'):
+                ad_delivery.patch_shadowrocket_literal(other, anchor, lambda value: value)
+
+    def test_native_shadowrocket_refreshes_static_and_dynamic_profiles(self):
+        settings = {'backend_url': 'https://subscriptions.example/fixture'}
+        anchor = 'DOMAIN-SET,' + ad_delivery.ads_url(settings, '') + ',REJECT'
+        original = {'content': '[General]\n[Rule]\n' + anchor + '\nMATCH,日常线路\n[Proxy Group]\n'}
+        dynamic = patch_shadowrocket(original, {'日本': ['JP']}, ['地区-日本'], 1800)
+        for before, key in ((original, 'content'), (dynamic, 'process')):
+            with self.subTest(profile=key):
+                after = ad_delivery.candidate(before, settings, {}, {'new.example': 'DIRECT'},
+                                              {}, '', 'shadowrocket-config')
+                self.assertIn('DOMAIN,new.example,DIRECT', str(after[key]))
+                self.assertNotIn('DOMAIN,new.example,DIRECT', str(before[key]))
+
     def test_route_and_dns_add_remove_and_retarget_in_both_yaml_formats(self):
         old = {'old.example': 'DIRECT', 'move.example': '日常线路'}
         new = {'analytics.google.com': '日常线路', 'move.example': 'DIRECT'}

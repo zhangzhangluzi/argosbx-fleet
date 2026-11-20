@@ -40,6 +40,7 @@ def error_detail(error):
             result.update(reason='console-blocked', host=host)
         for start, reason in (('广告名单变动超过', 'upstream-change-limit'),
                               ('广告名单缺少', 'missing-ad-sample'),
+                              ('Shadowrocket 托管广告配置', 'shadowrocket-template-changed'),
                               ('发布期间文件发生变化', 'concurrent-change')):
             if message.startswith(start):
                 result['reason'] = reason
